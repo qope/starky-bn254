@@ -153,9 +153,6 @@ mod tests {
     use crate::vars::{StarkEvaluationTargets, StarkEvaluationVars};
     use crate::verifier::verify_stark_proof;
 
-    const COLUMNS: usize = 4;
-    const PUBLIC_INPUTS: usize = 0;
-
     #[derive(Clone, Copy)]
     struct MyStark<F: RichField + Extendable<D>, const D: usize> {
         _phantom: PhantomData<F>,
@@ -190,12 +187,12 @@ mod tests {
     }
 
     impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for MyStark<F, D> {
-        const COLUMNS: usize = COLUMNS;
-        const PUBLIC_INPUTS: usize = PUBLIC_INPUTS;
+        const COLUMNS: usize = 4;
+        const PUBLIC_INPUTS: usize = 0;
 
         fn eval_packed_generic<FE, P, const D2: usize>(
             &self,
-            vars: StarkEvaluationVars<FE, P, COLUMNS, PUBLIC_INPUTS>,
+            vars: StarkEvaluationVars<FE, P, { Self::COLUMNS }, { Self::PUBLIC_INPUTS }>,
             yield_constr: &mut ConstraintConsumer<P>,
         ) where
             FE: FieldExtension<D2, BaseField = F>,
@@ -212,7 +209,7 @@ mod tests {
         fn eval_ext_circuit(
             &self,
             builder: &mut CircuitBuilder<F, D>,
-            vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
+            vars: StarkEvaluationTargets<D, { Self::COLUMNS }, { Self::PUBLIC_INPUTS }>,
             yield_constr: &mut RecursiveConstraintConsumer<F, D>,
         ) {
             eval_lookups_circuit(
