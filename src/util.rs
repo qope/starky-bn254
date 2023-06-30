@@ -151,6 +151,17 @@ where
     sum
 }
 
+pub fn pol_add_wide<T>(a: [T; 2 * N_LIMBS - 1], b: [T; 2 * N_LIMBS - 1]) -> [T; 2 * N_LIMBS - 1]
+where
+    T: Add<Output = T> + Copy + Default,
+{
+    let mut sum = pol_zero();
+    for i in 0..2 * N_LIMBS - 1 {
+        sum[i] = a[i] + b[i];
+    }
+    sum
+}
+
 pub fn pol_add_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     a: [ExtensionTarget<D>; N_LIMBS],
@@ -172,6 +183,17 @@ where
 {
     let mut diff = pol_zero();
     for i in 0..N_LIMBS {
+        diff[i] = a[i] - b[i];
+    }
+    diff
+}
+
+pub fn pol_sub_wide<T>(a: [T; 2 * N_LIMBS - 1], b: [T; 2 * N_LIMBS - 1]) -> [T; 2 * N_LIMBS - 1]
+where
+    T: Sub<Output = T> + Copy + Default,
+{
+    let mut diff = pol_zero();
+    for i in 0..2 * N_LIMBS - 1 {
         diff[i] = a[i] - b[i];
     }
     diff
@@ -228,6 +250,17 @@ where
         }
     }
     res
+}
+
+pub fn pol_mul_const<T>(a: [T; 2 * N_LIMBS - 1], c: T) -> [T; 2 * N_LIMBS - 1]
+where
+    T: Mul<Output = T> + Copy + Default,
+{
+    let mut muled = pol_zero();
+    for i in 0..2 * N_LIMBS - 1 {
+        muled[i] = c * a[i];
+    }
+    muled
 }
 
 pub fn pol_mul_wide_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
@@ -391,18 +424,23 @@ where
 
 /// Read the range `value_idxs` of values from `lv` into an array of
 /// length `N`. Panics if the length of the range is not `N`.
-pub(crate) fn read_value<const N: usize, T: Copy>(lv: &[T], value_idxs: Range<usize>) -> [T; N] {
+pub fn read_value<const N: usize, T: Copy>(lv: &[T], value_idxs: Range<usize>) -> [T; N] {
     lv[value_idxs].try_into().unwrap()
 }
 
 /// Read the range `value_idxs` of values from `lv` into an array of
 /// length `N`, interpreting the values as `i64`s. Panics if the
 /// length of the range is not `N`.
-pub(crate) fn read_value_i64_limbs<const N: usize, F: PrimeField64>(
+pub fn read_value_i64_limbs<const N: usize, F: PrimeField64>(
     lv: &[F],
     value_idxs: Range<usize>,
 ) -> [i64; N] {
     let limbs: [_; N] = lv[value_idxs].try_into().unwrap();
+    limbs.map(|c| c.to_canonical_u64() as i64)
+}
+
+pub fn to_i64_limbs<const N: usize, F: PrimeField64>(limbs: &[F]) -> [i64; N] {
+    let limbs: [_; N] = limbs.try_into().unwrap();
     limbs.map(|c| c.to_canonical_u64() as i64)
 }
 
