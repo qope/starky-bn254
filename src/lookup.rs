@@ -62,9 +62,6 @@ pub fn eval_lookups_circuit<
     let diff_product = builder.mul_extension(diff_input_prev, diff_input_table);
     yield_constr.constraint(builder, diff_product);
 
-    // This is actually constraining the first row, as per the spec, since `diff_input_table`
-    // is a diff of the next row's values. In the context of `constraint_last_row`, the next
-    // row is the first row.
     yield_constr.constraint_last_row(builder, diff_input_table);
 }
 
@@ -72,15 +69,6 @@ pub fn eval_lookups_circuit<
 /// used in the Halo2 permutation argument.
 pub fn permuted_cols<F: PrimeField64>(inputs: &[F], table: &[F]) -> (Vec<F>, Vec<F>) {
     let n = inputs.len();
-
-    // The permuted inputs do not have to be ordered, but we found that sorting was faster than
-    // hash-based grouping. We also sort the table, as this helps us identify "unused" table
-    // elements efficiently.
-
-    // To compare elements, e.g. for sorting, we first need them in canonical form. It would be
-    // wasteful to canonicalize in each comparison, as a single element may be involved in many
-    // comparisons. So we will canonicalize once upfront, then use `to_noncanonical_u64` when
-    // comparing elements.
 
     let sorted_inputs = inputs
         .iter()
@@ -130,6 +118,28 @@ pub fn permuted_cols<F: PrimeField64>(inputs: &[F], table: &[F]) -> (Vec<F>, Vec
     }
 
     (sorted_inputs, permuted_table)
+}
+
+pub fn generate_range_checks<F: PrimeField64>(
+    range_max: usize,
+    cols: &Vec<Vec<F>>,
+) -> (Vec<F>, Vec<(Vec<F>, Vec<F>)>) {
+    let n_rows = cols[0].len();
+    debug_assert!(cols.iter().all(|col| col.len() == n_rows));
+
+    let mut table = Vec::with_capacity(n_rows);
+    for i in 0..range_max {
+        table.push(F::from_canonical_usize(i));
+    }
+    for _ in range_max..n_rows {
+        table.push(F::from_canonical_usize(range_max - 1));
+    }
+    let mut pairs = vec![];
+    for c in cols {
+        let (col_perm, table_perm) = permuted_cols(&c, &table);
+        pairs.push((col_perm, table_perm));
+    }
+    (table, pairs)
 }
 
 #[cfg(test)]

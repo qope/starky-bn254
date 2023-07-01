@@ -1,3 +1,5 @@
+use core::fmt;
+
 use itertools::Itertools;
 use num::Zero;
 use num_bigint::{BigInt, Sign};
@@ -26,8 +28,7 @@ use super::addcy::{eval_ext_circuit_addcy, eval_packed_generic_addcy};
 
 pub const AUX_COEFF_ABS_MAX: i64 = 1 << 20;
 
-pub struct ModularOpWitness<F: PrimeField64> {
-    pub output: [F; N_LIMBS],
+pub struct ModulusWitness<F> {
     pub out_aux_red: [F; N_LIMBS],
     pub quot: [F; 2 * N_LIMBS],
     pub aux_input_lo: [F; 2 * N_LIMBS - 1],
@@ -37,7 +38,7 @@ pub struct ModularOpWitness<F: PrimeField64> {
 pub fn generate_modular_op<F: PrimeField64>(
     modulus: BigInt,
     pol_input: [i64; 2 * N_LIMBS - 1],
-) -> ModularOpWitness<F> {
+) -> ([F; N_LIMBS], ModulusWitness<F>) {
     let modulus_limbs = bigint_to_columns(&modulus);
 
     let mut constr_poly = [0i64; 2 * N_LIMBS];
@@ -86,13 +87,14 @@ pub fn generate_modular_op<F: PrimeField64>(
         .map(|&c| F::from_canonical_u16((c >> 16) as u16))
         .collect_vec();
 
-    ModularOpWitness {
-        output: output_limbs.map(|x| F::from_canonical_u64(x as u64)), // outputは必ず正の数になる
+    let output = output_limbs.map(|x| F::from_canonical_u64(x as u64));
+    let witness = ModulusWitness {
         quot: quot_limbs.map(|x| F::from_noncanonical_i64(x)), // quotは負の数になる可能性がある
         out_aux_red: out_aux_red.map(|x| F::from_canonical_u64(x as u64)),
         aux_input_lo: aux_input_lo.try_into().unwrap(),
         aux_input_hi: aux_input_hi.try_into().unwrap(),
-    }
+    };
+    (output, witness)
 }
 
 pub fn modular_constr_poly<P: PackedField>(
@@ -202,10 +204,69 @@ pub fn modular_constr_poly_ext_circuit<F: RichField + Extendable<D>, const D: us
     constr_poly
 }
 
+pub fn write_u256<F: Copy, const NUM_COL: usize, const N_LIMBS: usize>(
+    lv: &mut [F; NUM_COL],
+    input: &[F; N_LIMBS],
+    cur_col: &mut usize,
+) {
+    lv[*cur_col..*cur_col + N_LIMBS].copy_from_slice(input);
+    *cur_col += N_LIMBS;
+}
+
+pub fn read_u256<F: Clone + fmt::Debug, const N_LIMBS: usize>(
+    lv: &[F],
+    cur_col: &mut usize,
+) -> [F; N_LIMBS] {
+    let output = lv[*cur_col..*cur_col + N_LIMBS].to_vec();
+    *cur_col += N_LIMBS;
+    output.try_into().unwrap()
+}
+
+pub fn write_modulus_witness<F: Copy, const NUM_COL: usize, const N_LIMBS: usize>(
+    lv: &mut [F; NUM_COL],
+    out_aux_red: &[F],
+    quot: &[F],
+    aux_input_lo: &[F],
+    aux_input_hi: &[F],
+    cur_col: &mut usize,
+) {
+    assert!(out_aux_red.len() == N_LIMBS);
+    assert!(quot.len() == 2 * N_LIMBS);
+    assert!(aux_input_lo.len() == 2 * N_LIMBS - 1);
+    assert!(aux_input_hi.len() == 2 * N_LIMBS - 1);
+
+    lv[*cur_col..*cur_col + N_LIMBS].copy_from_slice(out_aux_red);
+    lv[*cur_col + N_LIMBS..*cur_col + 3 * N_LIMBS].copy_from_slice(quot);
+    lv[*cur_col + 3 * N_LIMBS..*cur_col + 5 * N_LIMBS - 1].copy_from_slice(aux_input_lo);
+    lv[*cur_col + 5 * N_LIMBS - 1..*cur_col + 7 * N_LIMBS - 2].copy_from_slice(aux_input_hi);
+
+    *cur_col += 7 * N_LIMBS - 2;
+}
+
+pub fn read_modulus_witness<F: Copy + fmt::Debug, const N_LIMBS: usize>(
+    lv: &[F],
+    cur_col: &mut usize,
+) -> ModulusWitness<F> {
+    let out_aux_red = lv[*cur_col..*cur_col + N_LIMBS].to_vec();
+    let quot = lv[*cur_col + N_LIMBS..*cur_col + 3 * N_LIMBS].to_vec();
+    let aux_input_lo = lv[*cur_col + 3 * N_LIMBS..*cur_col + 5 * N_LIMBS - 1].to_vec();
+    let aux_input_hi = lv[*cur_col + 5 * N_LIMBS - 1..*cur_col + 7 * N_LIMBS - 2].to_vec();
+
+    *cur_col += 7 * N_LIMBS - 2;
+
+    ModulusWitness {
+        out_aux_red: out_aux_red.try_into().unwrap(),
+        quot: quot.try_into().unwrap(),
+        aux_input_lo: aux_input_lo.try_into().unwrap(),
+        aux_input_hi: aux_input_hi.try_into().unwrap(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::marker::PhantomData;
 
+    use itertools::Itertools;
     use num::FromPrimitive;
     use num_bigint::BigInt;
     use plonky2::{
@@ -215,19 +276,22 @@ mod tests {
             polynomial::PolynomialValues,
         },
         hash::hash_types::RichField,
-        iop::witness::PartialWitness,
+        iop::{ext_target::ExtensionTarget, witness::PartialWitness},
         plonk::{
             circuit_builder::CircuitBuilder,
             circuit_data::CircuitConfig,
             config::{GenericConfig, PoseidonGoldilocksConfig},
         },
-        util::timing::TimingTree,
+        util::{timing::TimingTree, transpose},
     };
 
     use crate::{
         columns::N_LIMBS,
         config::StarkConfig,
         constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
+        develop::modular::{write_modulus_witness, write_u256},
+        lookup::{eval_lookups, eval_lookups_circuit, generate_range_checks},
+        permutation::PermutationPair,
         prover::prove,
         recursive_verifier::{
             add_virtual_stark_proof_with_pis, set_stark_proof_with_pis_target,
@@ -237,17 +301,18 @@ mod tests {
         util::{
             bigint_to_columns, bn254_modulus_limbs, columns_to_bigint, pol_mul_wide,
             pol_mul_wide_ext_circuit, pol_sub_assign, pol_sub_assign_ext_circuit,
-            trace_rows_to_poly_values,
         },
         vars::{StarkEvaluationTargets, StarkEvaluationVars},
         verifier::verify_stark_proof,
     };
 
     use super::{
-        generate_modular_op, modular_constr_poly, modular_constr_poly_ext_circuit, ModularOpWitness,
+        generate_modular_op, modular_constr_poly, modular_constr_poly_ext_circuit,
+        read_modulus_witness, read_u256, ModulusWitness,
     };
 
-    const NUM_COLUMS: usize = 11 * N_LIMBS - 2;
+    const NUM_ARITH_COLUMS: usize = 11 * N_LIMBS - 1;
+    const TABLE_COL: usize = NUM_ARITH_COLUMS;
 
     #[derive(Clone, Copy)]
     pub struct ModularStark<F: RichField + Extendable<D>, const D: usize> {
@@ -260,50 +325,84 @@ mod tests {
                 _phantom: PhantomData,
             }
         }
+
         pub fn generate_trace(&self) -> Vec<PolynomialValues<F>> {
             let mut rows = vec![];
 
-            for _ in 0..1 << 16 {
+            for _ in 0..1 << 10 {
                 let input0 = BigInt::from_u128(123).unwrap();
                 let input1 = BigInt::from_u128(434).unwrap();
 
                 let input0_limbs: [i64; N_LIMBS] = bigint_to_columns(&input0);
                 let input1_limbs: [i64; N_LIMBS] = bigint_to_columns(&input1);
 
+                let input0 = input0_limbs.map(|x| F::from_canonical_u64(x as u64));
+                let input1 = input1_limbs.map(|x| F::from_canonical_u64(x as u64));
+
                 let modulus_limbs = bn254_modulus_limbs();
                 let modulus_bigint = columns_to_bigint(&modulus_limbs.map(|x| x as i64));
+                let modulus = modulus_limbs.map(|x| F::from_canonical_u64(x as u64));
 
                 let pol_input = pol_mul_wide(input0_limbs, input1_limbs);
 
-                let ModularOpWitness {
+                let (
                     output,
-                    out_aux_red,
-                    quot,
-                    aux_input_lo,
-                    aux_input_hi,
-                } = generate_modular_op::<F>(modulus_bigint, pol_input);
+                    ModulusWitness {
+                        out_aux_red,
+                        quot,
+                        aux_input_lo,
+                        aux_input_hi,
+                    },
+                ) = generate_modular_op::<F>(modulus_bigint, pol_input);
 
-                let mut lv = [F::ZERO; NUM_COLUMS];
-                lv[0..N_LIMBS]
-                    .copy_from_slice(&input0_limbs.map(|x| F::from_canonical_u64(x as u64)));
-                lv[N_LIMBS..2 * N_LIMBS]
-                    .copy_from_slice(&input1_limbs.map(|x| F::from_canonical_u64(x as u64)));
-                lv[2 * N_LIMBS..3 * N_LIMBS]
-                    .copy_from_slice(&modulus_limbs.map(|x| F::from_canonical_u64(x as u64)));
+                let mut lv = [F::ZERO; NUM_ARITH_COLUMS];
 
-                lv[3 * N_LIMBS..4 * N_LIMBS].copy_from_slice(&output);
-                lv[4 * N_LIMBS..5 * N_LIMBS].copy_from_slice(&out_aux_red);
-                lv[5 * N_LIMBS..7 * N_LIMBS].copy_from_slice(&quot);
-                lv[7 * N_LIMBS..9 * N_LIMBS - 1].copy_from_slice(&aux_input_lo);
-                lv[9 * N_LIMBS - 1..11 * N_LIMBS - 2].copy_from_slice(&aux_input_hi);
+                let mut cur_col = 0;
+
+                write_u256(&mut lv, &input0, &mut cur_col);
+                write_u256(&mut lv, &input1, &mut cur_col);
+                write_u256(&mut lv, &modulus, &mut cur_col);
+                write_u256(&mut lv, &output, &mut cur_col);
+                write_modulus_witness::<_, NUM_ARITH_COLUMS, N_LIMBS>(
+                    &mut lv,
+                    &out_aux_red,
+                    &quot,
+                    &aux_input_lo,
+                    &aux_input_hi,
+                    &mut cur_col,
+                );
+                lv[cur_col] = F::ONE;
+                cur_col += 1;
+
+                assert!(cur_col == NUM_ARITH_COLUMS);
+                assert!(lv.iter().all(|x| x.to_canonical_u64() < (1 << 16)));
                 rows.push(lv);
             }
-            trace_rows_to_poly_values(rows)
+
+            let range_max = 1 << 16;
+            let padded_len = rows.len().next_power_of_two();
+            for _ in rows.len()..std::cmp::max(padded_len, range_max) {
+                rows.push([F::ZERO; NUM_ARITH_COLUMS]);
+            }
+
+            let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
+            let (table, pairs) = generate_range_checks(range_max, &trace_cols);
+
+            trace_cols.push(table);
+            pairs.iter().for_each(|(c_perm, t_perm)| {
+                trace_cols.push(c_perm.to_vec());
+                trace_cols.push(t_perm.to_vec());
+            });
+
+            trace_cols
+                .into_iter()
+                .map(|column| PolynomialValues::new(column))
+                .collect()
         }
     }
 
     impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for ModularStark<F, D> {
-        const COLUMNS: usize = NUM_COLUMS;
+        const COLUMNS: usize = NUM_ARITH_COLUMS + 1 + 2 * NUM_ARITH_COLUMS;
         const PUBLIC_INPUTS: usize = 0;
 
         fn eval_packed_generic<FE, P, const D2: usize>(
@@ -316,22 +415,28 @@ mod tests {
         {
             let lv = vars.local_values.clone();
 
-            let input0: [P; N_LIMBS] = lv[0..N_LIMBS].to_vec().try_into().unwrap();
-            let input1: [P; N_LIMBS] = lv[N_LIMBS..2 * N_LIMBS].to_vec().try_into().unwrap();
-            let modulus = lv[2 * N_LIMBS..3 * N_LIMBS].to_vec().try_into().unwrap();
-            let output = lv[3 * N_LIMBS..4 * N_LIMBS].to_vec().try_into().unwrap();
-            let out_aux_red = lv[4 * N_LIMBS..5 * N_LIMBS].to_vec().try_into().unwrap();
-            let quot = lv[5 * N_LIMBS..7 * N_LIMBS].to_vec().try_into().unwrap();
-            let aux_input_lo = lv[7 * N_LIMBS..9 * N_LIMBS - 1]
-                .to_vec()
-                .try_into()
-                .unwrap();
-            let aux_input_hi = lv[9 * N_LIMBS - 1..11 * N_LIMBS - 2]
-                .to_vec()
-                .try_into()
-                .unwrap();
+            for i in (NUM_ARITH_COLUMS + 1..3 * NUM_ARITH_COLUMS + 1).step_by(2) {
+                eval_lookups(vars, yield_constr, i, i + 1);
+            }
 
-            let filter = P::ONES;
+            let mut cur_col = 0;
+
+            let input0: [P; N_LIMBS] = read_u256(&lv, &mut cur_col);
+            let input1: [P; N_LIMBS] = read_u256(&lv, &mut cur_col);
+            let modulus = read_u256(&lv, &mut cur_col);
+            let output = read_u256(&lv, &mut cur_col);
+
+            let ModulusWitness {
+                out_aux_red,
+                quot,
+                aux_input_lo,
+                aux_input_hi,
+            } = read_modulus_witness::<P, N_LIMBS>(&lv, &mut cur_col);
+
+            let filter = lv[cur_col];
+            cur_col += 1;
+            assert!(cur_col == NUM_ARITH_COLUMS);
+
             let constr_poly = modular_constr_poly::<P>(
                 yield_constr,
                 filter,
@@ -360,22 +465,28 @@ mod tests {
         ) {
             let lv = vars.local_values.clone();
 
-            let input0 = lv[0..N_LIMBS].to_vec().try_into().unwrap();
-            let input1 = lv[N_LIMBS..2 * N_LIMBS].to_vec().try_into().unwrap();
-            let modulus = lv[2 * N_LIMBS..3 * N_LIMBS].to_vec().try_into().unwrap();
-            let output = lv[3 * N_LIMBS..4 * N_LIMBS].to_vec().try_into().unwrap();
-            let out_aux_red = lv[4 * N_LIMBS..5 * N_LIMBS].to_vec().try_into().unwrap();
-            let quot = lv[5 * N_LIMBS..7 * N_LIMBS].to_vec().try_into().unwrap();
-            let aux_input_lo = lv[7 * N_LIMBS..9 * N_LIMBS - 1]
-                .to_vec()
-                .try_into()
-                .unwrap();
-            let aux_input_hi = lv[9 * N_LIMBS - 1..11 * N_LIMBS - 2]
-                .to_vec()
-                .try_into()
-                .unwrap();
+            for i in (NUM_ARITH_COLUMS + 1..3 * NUM_ARITH_COLUMS + 1).step_by(2) {
+                eval_lookups_circuit(builder, vars, yield_constr, i, i + 1);
+            }
 
-            let filter = builder.one_extension();
+            let mut cur_col = 0;
+
+            let input0: [ExtensionTarget<D>; N_LIMBS] = read_u256(&lv, &mut cur_col);
+            let input1: [ExtensionTarget<D>; N_LIMBS] = read_u256(&lv, &mut cur_col);
+            let modulus: [ExtensionTarget<D>; N_LIMBS] = read_u256(&lv, &mut cur_col);
+            let output: [ExtensionTarget<D>; N_LIMBS] = read_u256(&lv, &mut cur_col);
+
+            let ModulusWitness {
+                out_aux_red,
+                quot,
+                aux_input_lo,
+                aux_input_hi,
+            } = read_modulus_witness::<_, N_LIMBS>(&lv, &mut cur_col);
+
+            let filter = lv[cur_col];
+            cur_col += 1;
+            assert!(cur_col == NUM_ARITH_COLUMS);
+
             let constr_poly = modular_constr_poly_ext_circuit::<F, D>(
                 builder,
                 yield_constr,
@@ -398,9 +509,21 @@ mod tests {
             }
         }
 
-        /// The maximum constraint degree.
         fn constraint_degree(&self) -> usize {
             3
+        }
+
+        fn permutation_pairs(&self) -> Vec<PermutationPair> {
+            let mut pairs = (0..NUM_ARITH_COLUMS)
+                .map(|i| PermutationPair::singletons(i, NUM_ARITH_COLUMS + 1 + 2 * i))
+                .collect_vec();
+            let pairs_table = (0..NUM_ARITH_COLUMS)
+                .map(|i| PermutationPair::singletons(TABLE_COL, NUM_ARITH_COLUMS + 2 + 2 * i))
+                .collect_vec();
+
+            pairs.extend(pairs_table);
+
+            pairs
         }
     }
 
