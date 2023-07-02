@@ -169,6 +169,19 @@ where
     sum
 }
 
+pub fn pol_add_wide_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    a: [ExtensionTarget<D>; 2 * N_LIMBS - 1],
+    b: [ExtensionTarget<D>; 2 * N_LIMBS - 1],
+) -> [ExtensionTarget<D>; 2 * N_LIMBS - 1] {
+    let zero = builder.zero_extension();
+    let mut diff = [zero; 2 * N_LIMBS - 1];
+    for i in 0..2 * N_LIMBS - 1 {
+        diff[i] = builder.add_extension(a[i], b[i]);
+    }
+    diff
+}
+
 pub fn pol_add_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     a: [ExtensionTarget<D>; N_LIMBS],
@@ -202,6 +215,19 @@ where
     let mut diff = pol_zero();
     for i in 0..2 * N_LIMBS - 1 {
         diff[i] = a[i] - b[i];
+    }
+    diff
+}
+
+pub fn pol_sub_wide_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    a: [ExtensionTarget<D>; 2 * N_LIMBS - 1],
+    b: [ExtensionTarget<D>; 2 * N_LIMBS - 1],
+) -> [ExtensionTarget<D>; 2 * N_LIMBS - 1] {
+    let zero = builder.zero_extension();
+    let mut diff = [zero; 2 * N_LIMBS - 1];
+    for i in 0..2 * N_LIMBS - 1 {
+        diff[i] = builder.sub_extension(a[i], b[i]);
     }
     diff
 }
@@ -268,6 +294,20 @@ where
         muled[i] = c * a[i];
     }
     muled
+}
+
+pub fn pol_mul_const_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    a: [ExtensionTarget<D>; 2 * N_LIMBS - 1],
+    c: F::Extension,
+) -> [ExtensionTarget<D>; 2 * N_LIMBS - 1] {
+    let c = builder.constant_extension(c);
+    let zero = builder.zero_extension();
+    let mut res = [zero; 2 * N_LIMBS - 1];
+    for i in 0..2 * N_LIMBS - 1 {
+        res[i] = builder.mul_extension(a[i], c);
+    }
+    res
 }
 
 pub fn pol_mul_wide_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
