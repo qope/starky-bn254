@@ -11,7 +11,6 @@ use plonky2::{
     hash::hash_types::RichField,
 };
 
-use crate::columns::{LIMB_BITS, N_LIMBS};
 use crate::constraint_consumer::RecursiveConstraintConsumer;
 use crate::util::{
     pol_add_assign_ext_circuit, pol_adjoin_root_ext_circuit, pol_mul_wide2_ext_circuit,
@@ -26,11 +25,12 @@ use crate::{
 
 use super::addcy::{eval_ext_circuit_addcy, eval_packed_generic_addcy};
 
-pub const AUX_COEFF_ABS_MAX: i64 = 1 << 20;
+use crate::constants::{LIMB_BITS, N_LIMBS};
 
-pub struct ModulusWitness<F> {
+pub const AUX_COEFF_ABS_MAX: i64 = 1 << 30;
+
+pub struct ModulusAux<F> {
     pub out_aux_red: [F; N_LIMBS],
-    pub quot: [F; 2 * N_LIMBS],
     pub aux_input_lo: [F; 2 * N_LIMBS - 1],
     pub aux_input_hi: [F; 2 * N_LIMBS - 1],
 }
@@ -38,7 +38,7 @@ pub struct ModulusWitness<F> {
 pub fn generate_modular_op<F: PrimeField64>(
     modulus: BigInt,
     pol_input: [i64; 2 * N_LIMBS - 1],
-) -> ([F; N_LIMBS], ModulusWitness<F>) {
+) -> ([F; N_LIMBS], [F; 2 * N_LIMBS], ModulusAux<F>) {
     let modulus_limbs = bigint_to_columns(&modulus);
 
     let mut constr_poly = [0i64; 2 * N_LIMBS];
@@ -48,14 +48,12 @@ pub fn generate_modular_op<F: PrimeField64>(
     two_exp_256.set_bit(256, true);
 
     let input = columns_to_bigint(&constr_poly);
-    // 例えば、-2 % 3 = -2 となるので、これを一旦プラスに変換する必要がある。
     let mut output = &input % &modulus;
     if output.sign() == Sign::Minus {
         output += &modulus;
     }
     let output_limbs = bigint_to_columns::<N_LIMBS>(&output);
-
-    let quot = (&input - &output) / &modulus; // マイナスになる場合もある
+    let quot = (&input - &output) / &modulus;
     let quot_limbs = bigint_to_columns::<{ 2 * N_LIMBS }>(&quot);
     // 0 <= out_aux_red < 2^256 という制約を課す(つまりout_aux_redのlimbには2^16のrange checkを課す)
     // out_aux_red = 2^256 - modulus + outputより、output < modulusが成り立つ
@@ -88,13 +86,13 @@ pub fn generate_modular_op<F: PrimeField64>(
         .collect_vec();
 
     let output = output_limbs.map(|x| F::from_canonical_u64(x as u64));
-    let witness = ModulusWitness {
-        quot: quot_limbs.map(|x| F::from_noncanonical_i64(x)), // quotは負の数になる可能性がある
-        out_aux_red: out_aux_red.map(|x| F::from_canonical_u64(x as u64)),
+    let quot = quot_limbs.map(|x| F::from_noncanonical_i64(x));
+    let aux = ModulusAux {
+        out_aux_red: out_aux_red.map(|x| F::from_canonical_i64(x)),
         aux_input_lo: aux_input_lo.try_into().unwrap(),
         aux_input_hi: aux_input_hi.try_into().unwrap(),
     };
-    (output, witness)
+    (output, quot, aux)
 }
 
 pub fn modular_constr_poly<P: PackedField>(
@@ -222,41 +220,44 @@ pub fn read_u256<F: Clone + fmt::Debug, const N_LIMBS: usize>(
     output.try_into().unwrap()
 }
 
-pub fn write_modulus_witness<F: Copy, const NUM_COL: usize, const N_LIMBS: usize>(
-    lv: &mut [F; NUM_COL],
-    out_aux_red: &[F],
-    quot: &[F],
-    aux_input_lo: &[F],
-    aux_input_hi: &[F],
+pub fn write_quot<F: Copy, const N: usize, const M: usize>(
+    lv: &mut [F; N],
+    quot: &[F; M],
     cur_col: &mut usize,
 ) {
-    assert!(out_aux_red.len() == N_LIMBS);
-    assert!(quot.len() == 2 * N_LIMBS);
-    assert!(aux_input_lo.len() == 2 * N_LIMBS - 1);
-    assert!(aux_input_hi.len() == 2 * N_LIMBS - 1);
-
-    lv[*cur_col..*cur_col + N_LIMBS].copy_from_slice(out_aux_red);
-    lv[*cur_col + N_LIMBS..*cur_col + 3 * N_LIMBS].copy_from_slice(quot);
-    lv[*cur_col + 3 * N_LIMBS..*cur_col + 5 * N_LIMBS - 1].copy_from_slice(aux_input_lo);
-    lv[*cur_col + 5 * N_LIMBS - 1..*cur_col + 7 * N_LIMBS - 2].copy_from_slice(aux_input_hi);
-
-    *cur_col += 7 * N_LIMBS - 2;
+    lv[*cur_col..*cur_col + M].copy_from_slice(quot);
+    *cur_col += M;
 }
 
-pub fn read_modulus_witness<F: Copy + fmt::Debug, const N_LIMBS: usize>(
+pub fn read_quot<F: Clone + fmt::Debug, const M: usize>(lv: &[F], cur_col: &mut usize) -> [F; M] {
+    let output = lv[*cur_col..*cur_col + M].to_vec();
+    *cur_col += M;
+    output.try_into().unwrap()
+}
+
+pub fn write_modulus_aux<F: Copy, const NUM_COL: usize, const N_LIMBS: usize>(
+    lv: &mut [F; NUM_COL],
+    aux: &ModulusAux<F>,
+    cur_col: &mut usize,
+) {
+    lv[*cur_col..*cur_col + N_LIMBS].copy_from_slice(&aux.out_aux_red);
+    lv[*cur_col + N_LIMBS..*cur_col + 3 * N_LIMBS - 1].copy_from_slice(&aux.aux_input_lo);
+    lv[*cur_col + 3 * N_LIMBS - 1..*cur_col + 5 * N_LIMBS - 2].copy_from_slice(&aux.aux_input_hi);
+    *cur_col += 5 * N_LIMBS - 2;
+}
+
+pub fn read_modulus_aux<F: Copy + fmt::Debug, const N_LIMBS: usize>(
     lv: &[F],
     cur_col: &mut usize,
-) -> ModulusWitness<F> {
+) -> ModulusAux<F> {
     let out_aux_red = lv[*cur_col..*cur_col + N_LIMBS].to_vec();
-    let quot = lv[*cur_col + N_LIMBS..*cur_col + 3 * N_LIMBS].to_vec();
-    let aux_input_lo = lv[*cur_col + 3 * N_LIMBS..*cur_col + 5 * N_LIMBS - 1].to_vec();
-    let aux_input_hi = lv[*cur_col + 5 * N_LIMBS - 1..*cur_col + 7 * N_LIMBS - 2].to_vec();
+    let aux_input_lo = lv[*cur_col + N_LIMBS..*cur_col + 3 * N_LIMBS - 1].to_vec();
+    let aux_input_hi = lv[*cur_col + 3 * N_LIMBS - 1..*cur_col + 5 * N_LIMBS - 2].to_vec();
 
-    *cur_col += 7 * N_LIMBS - 2;
+    *cur_col += 5 * N_LIMBS - 2;
 
-    ModulusWitness {
+    ModulusAux {
         out_aux_red: out_aux_red.try_into().unwrap(),
-        quot: quot.try_into().unwrap(),
         aux_input_lo: aux_input_lo.try_into().unwrap(),
         aux_input_hi: aux_input_hi.try_into().unwrap(),
     }
@@ -266,9 +267,11 @@ pub fn read_modulus_witness<F: Copy + fmt::Debug, const N_LIMBS: usize>(
 mod tests {
     use core::marker::PhantomData;
 
+    use ark_bn254::Fq;
+    use ark_std::UniformRand;
     use itertools::Itertools;
     use num::FromPrimitive;
-    use num_bigint::BigInt;
+    use num_bigint::{BigInt, BigUint};
     use plonky2::{
         field::{
             extension::{Extendable, FieldExtension},
@@ -286,10 +289,10 @@ mod tests {
     };
 
     use crate::{
-        columns::N_LIMBS,
         config::StarkConfig,
+        constants::LIMB_BITS,
         constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
-        develop::modular::{write_modulus_witness, write_u256},
+        develop::modular::{read_quot, write_modulus_aux, write_quot, write_u256},
         lookup::{eval_lookups, eval_lookups_circuit, generate_range_checks},
         permutation::PermutationPair,
         prover::prove,
@@ -299,8 +302,8 @@ mod tests {
         },
         stark::Stark,
         util::{
-            bigint_to_columns, bn254_modulus_limbs, columns_to_bigint, pol_mul_wide,
-            pol_mul_wide_ext_circuit, pol_sub_assign, pol_sub_assign_ext_circuit,
+            bigint_to_columns, columns_to_bigint, pol_mul_wide, pol_mul_wide_ext_circuit,
+            pol_sub_assign, pol_sub_assign_ext_circuit,
         },
         vars::{StarkEvaluationTargets, StarkEvaluationVars},
         verifier::verify_stark_proof,
@@ -308,7 +311,7 @@ mod tests {
 
     use super::{
         generate_modular_op, modular_constr_poly, modular_constr_poly_ext_circuit,
-        read_modulus_witness, read_u256, ModulusWitness,
+        read_modulus_aux, read_u256, ModulusAux, N_LIMBS,
     };
 
     const NUM_ARITH_COLUMS: usize = 11 * N_LIMBS - 1;
@@ -327,33 +330,38 @@ mod tests {
         }
 
         pub fn generate_trace(&self) -> Vec<PolynomialValues<F>> {
+            let mut rng = rand::thread_rng();
+
             let mut rows = vec![];
 
-            for _ in 0..1 << 10 {
-                let input0 = BigInt::from_u128(123).unwrap();
-                let input1 = BigInt::from_u128(434).unwrap();
+            for _ in 0..1 << 2 {
+                let input0_fq = Fq::rand(&mut rng);
+                let input1_fq = Fq::rand(&mut rng);
+                let output_fq: Fq = input0_fq * input1_fq;
+                let output_expected_biguint: BigUint = output_fq.into();
+                let output_expected: BigInt = output_expected_biguint.into();
+                let input0_biguint: BigUint = input0_fq.into();
+                let input1_biguint: BigUint = input1_fq.into();
 
-                let input0_limbs: [i64; N_LIMBS] = bigint_to_columns(&input0);
-                let input1_limbs: [i64; N_LIMBS] = bigint_to_columns(&input1);
+                let neg_one: BigUint = Fq::from(-1).into();
+                let modulus_biguint: BigUint = neg_one + BigUint::from_usize(1).unwrap();
+                let modulus_bigint: BigInt = modulus_biguint.into();
+
+                let input0_limbs: [i64; N_LIMBS] = bigint_to_columns(&input0_biguint.into());
+                let input1_limbs: [i64; N_LIMBS] = bigint_to_columns(&input1_biguint.into());
 
                 let input0 = input0_limbs.map(|x| F::from_canonical_u64(x as u64));
                 let input1 = input1_limbs.map(|x| F::from_canonical_u64(x as u64));
 
-                let modulus_limbs = bn254_modulus_limbs();
-                let modulus_bigint = columns_to_bigint(&modulus_limbs.map(|x| x as i64));
-                let modulus = modulus_limbs.map(|x| F::from_canonical_u64(x as u64));
+                let modulus: [F; N_LIMBS] =
+                    bigint_to_columns(&modulus_bigint).map(|x| F::from_canonical_i64(x));
 
                 let pol_input = pol_mul_wide(input0_limbs, input1_limbs);
 
-                let (
-                    output,
-                    ModulusWitness {
-                        out_aux_red,
-                        quot,
-                        aux_input_lo,
-                        aux_input_hi,
-                    },
-                ) = generate_modular_op::<F>(modulus_bigint, pol_input);
+                let (output, quot, aux) = generate_modular_op::<F>(modulus_bigint, pol_input);
+
+                let output_actual = columns_to_bigint(&output.map(|a| a.to_canonical_u64() as i64));
+                assert!(output_expected == output_actual);
 
                 let mut lv = [F::ZERO; NUM_ARITH_COLUMS];
 
@@ -363,23 +371,17 @@ mod tests {
                 write_u256(&mut lv, &input1, &mut cur_col);
                 write_u256(&mut lv, &modulus, &mut cur_col);
                 write_u256(&mut lv, &output, &mut cur_col);
-                write_modulus_witness::<_, NUM_ARITH_COLUMS, N_LIMBS>(
-                    &mut lv,
-                    &out_aux_red,
-                    &quot,
-                    &aux_input_lo,
-                    &aux_input_hi,
-                    &mut cur_col,
-                );
+                write_modulus_aux::<_, NUM_ARITH_COLUMS, N_LIMBS>(&mut lv, &aux, &mut cur_col);
+                write_quot(&mut lv, &quot, &mut cur_col);
                 lv[cur_col] = F::ONE;
                 cur_col += 1;
 
                 assert!(cur_col == NUM_ARITH_COLUMS);
-                assert!(lv.iter().all(|x| x.to_canonical_u64() < (1 << 16)));
+                assert!(lv.iter().all(|x| x.to_canonical_u64() < (1 << LIMB_BITS)));
                 rows.push(lv);
             }
 
-            let range_max = 1 << 16;
+            let range_max = 1 << LIMB_BITS;
             let padded_len = rows.len().next_power_of_two();
             for _ in rows.len()..std::cmp::max(padded_len, range_max) {
                 rows.push([F::ZERO; NUM_ARITH_COLUMS]);
@@ -426,12 +428,12 @@ mod tests {
             let modulus = read_u256(&lv, &mut cur_col);
             let output = read_u256(&lv, &mut cur_col);
 
-            let ModulusWitness {
+            let ModulusAux {
                 out_aux_red,
-                quot,
                 aux_input_lo,
                 aux_input_hi,
-            } = read_modulus_witness::<P, N_LIMBS>(&lv, &mut cur_col);
+            } = read_modulus_aux::<P, N_LIMBS>(&lv, &mut cur_col);
+            let quot = read_quot(&lv, &mut cur_col);
 
             let filter = lv[cur_col];
             cur_col += 1;
@@ -476,12 +478,12 @@ mod tests {
             let modulus: [ExtensionTarget<D>; N_LIMBS] = read_u256(&lv, &mut cur_col);
             let output: [ExtensionTarget<D>; N_LIMBS] = read_u256(&lv, &mut cur_col);
 
-            let ModulusWitness {
+            let ModulusAux {
                 out_aux_red,
-                quot,
                 aux_input_lo,
                 aux_input_hi,
-            } = read_modulus_witness::<_, N_LIMBS>(&lv, &mut cur_col);
+            } = read_modulus_aux::<_, N_LIMBS>(&lv, &mut cur_col);
+            let quot = read_quot(&lv, &mut cur_col);
 
             let filter = lv[cur_col];
             cur_col += 1;

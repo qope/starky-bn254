@@ -9,11 +9,12 @@ extern crate alloc;
 
 mod get_challenges;
 
-pub mod columns;
 pub mod config;
+pub mod constants;
 pub mod constraint_consumer;
 pub mod develop;
 pub mod lookup;
+pub mod native;
 pub mod permutation;
 pub mod proof;
 pub mod prover;

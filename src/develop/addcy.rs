@@ -6,8 +6,10 @@ use plonky2::hash::hash_types::RichField;
 use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 
-use crate::columns::*;
-use crate::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
+use crate::{
+    constants::{LIMB_BITS, N_LIMBS},
+    constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
+};
 
 /// 2^-16 mod (2^64 - 2^32 + 1)
 const GOLDILOCKS_INVERSE_65536: u64 = 18446462594437939201;

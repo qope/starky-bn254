@@ -2,9 +2,10 @@ use core::ops::*;
 
 use alloc::vec::Vec;
 
+use ark_bn254::{Fq, Fq12};
 use ethereum_types::U256;
 use itertools::Itertools;
-use num_bigint::{BigInt, Sign};
+use num_bigint::{BigInt, BigUint, Sign};
 use plonky2::field::extension::Extendable;
 use plonky2::field::polynomial::PolynomialValues;
 use plonky2::field::types::{Field, PrimeField64};
@@ -12,9 +13,9 @@ use plonky2::hash::hash_types::RichField;
 use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::util::transpose;
-use static_assertions::const_assert;
 
-use crate::columns::{LIMB_BITS, N_LIMBS};
+use crate::constants::{LIMB_BITS, N_LIMBS};
+use crate::native::MyFq12;
 
 pub const BN_BASE: U256 = U256([
     4332616871279656263,
@@ -22,21 +23,6 @@ pub const BN_BASE: U256 = U256([
     13281191951274694749,
     3486998266802970665,
 ]);
-
-pub fn bn254_modulus_limbs() -> [u16; N_LIMBS] {
-    const_assert!(N_LIMBS == 16); // Assumed below
-    let mut limbs = [0u16; N_LIMBS];
-    let mut i = 0;
-    while i < N_LIMBS / 4 {
-        let x = BN_BASE.0[i];
-        limbs[4 * i] = x as u16;
-        limbs[4 * i + 1] = (x >> 16) as u16;
-        limbs[4 * i + 2] = (x >> 32) as u16;
-        limbs[4 * i + 3] = (x >> 48) as u16;
-        i += 1;
-    }
-    limbs
-}
 
 pub fn columns_to_bigint<const N: usize>(limbs: &[i64; N]) -> BigInt {
     const BASE: i64 = 1i64 << LIMB_BITS;
@@ -80,14 +66,35 @@ pub fn bigint_to_columns<const N: usize>(num: &BigInt) -> [i64; N] {
     output
 }
 
-pub fn u256_to_array<F: Field>(out: &mut [F], x: U256) {
-    const_assert!(N_LIMBS == 16);
-    debug_assert!(out.len() == N_LIMBS);
+pub fn fq_to_columns<const N: usize>(x: Fq) -> [i64; N] {
+    let x_biguint: BigUint = x.into();
+    bigint_to_columns(&x_biguint.into())
+}
 
-    u64_to_array(&mut out[0..4], x.0[0]);
-    u64_to_array(&mut out[4..8], x.0[1]);
-    u64_to_array(&mut out[8..12], x.0[2]);
-    u64_to_array(&mut out[12..16], x.0[3]);
+pub fn fq12_to_columns<const N: usize>(x: Fq12) -> Vec<[i64; N]> {
+    let x_myfq12: MyFq12 = x.into();
+    x_myfq12
+        .coeffs
+        .iter()
+        .map(|c| fq_to_columns(c.clone()))
+        .collect()
+}
+
+pub fn columns_to_fq<F: PrimeField64, const N: usize>(column: &[F; N]) -> Fq {
+    let column = column.map(|x| x.to_canonical_u64() as i64);
+    let x = columns_to_bigint(&column);
+    x.to_biguint().unwrap().into()
+}
+
+pub fn columns_to_fq12<F: PrimeField64, const N: usize>(column: &Vec<[F; N]>) -> Fq12 {
+    let coeffs = column
+        .iter()
+        .map(|column| columns_to_fq(column))
+        .collect_vec();
+    MyFq12 {
+        coeffs: coeffs.try_into().unwrap(),
+    }
+    .into()
 }
 
 /// A helper function to transpose a row-wise trace and put it in the format that `prove` expects.
@@ -442,15 +449,4 @@ pub fn read_value_i64_limbs<const N: usize, F: PrimeField64>(
 pub fn to_i64_limbs<const N: usize, F: PrimeField64>(limbs: &[F]) -> [i64; N] {
     let limbs: [_; N] = limbs.try_into().unwrap();
     limbs.map(|c| c.to_canonical_u64() as i64)
-}
-
-#[inline]
-fn u64_to_array<F: Field>(out: &mut [F], x: u64) {
-    const_assert!(LIMB_BITS == 16);
-    debug_assert!(out.len() == 4);
-
-    out[0] = F::from_canonical_u16(x as u16);
-    out[1] = F::from_canonical_u16((x >> 16) as u16);
-    out[2] = F::from_canonical_u16((x >> 32) as u16);
-    out[3] = F::from_canonical_u16((x >> 48) as u16);
 }
