@@ -143,7 +143,8 @@ mod tests {
 
     const BITS_LEN: usize = 256;
     const INSTRUCTION_LEN: usize = 2 * BITS_LEN;
-    const MAIN_COLS: usize = 10 * N_LIMBS - 2 + 3 * INSTRUCTION_LEN;
+    const START_INSTRUCTION: usize = 10 * N_LIMBS - 2;
+    const MAIN_COLS: usize = START_INSTRUCTION + 3 * INSTRUCTION_LEN;
     const RANGE32_COLS: usize = 7 * N_LIMBS - 2;
 
     #[derive(Clone, Copy)]
@@ -213,7 +214,7 @@ mod tests {
             write_u256(&mut lv, &x.map(|x| F::from_canonical_i64(x)), &mut cur_col);
             write_u256(&mut lv, &y.map(|x| F::from_canonical_i64(x)), &mut cur_col);
 
-            cur_col = 10 * N_LIMBS - 2;
+            cur_col = START_INSTRUCTION;
             write_instruction::<_, MAIN_COLS, INSTRUCTION_LEN>(
                 &mut lv,
                 &square_instruction.clone().try_into().unwrap(),
@@ -239,7 +240,7 @@ mod tests {
 
                 // spare room for aux(5*N_LIMBS - 2) and quot(2*N_LIMBS)
                 // because instructions does not have to be range checked
-                cur_col = 10 * N_LIMBS - 2;
+                cur_col = START_INSTRUCTION;
                 let square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
                 let mul_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
                 let no_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
@@ -247,7 +248,7 @@ mod tests {
                 let is_mul = mul_instruction[0] == F::ONE;
                 let is_noop = no_instruction[0] == F::ONE;
 
-                assert!(cur_col == 10 * N_LIMBS - 2 + 3 * INSTRUCTION_LEN);
+                assert!(cur_col == MAIN_COLS);
 
                 let x_sq = pol_mul_wide(x, x);
                 let x_mul_y = pol_mul_wide(x, y);
@@ -268,7 +269,7 @@ mod tests {
                 write_modulus_aux::<_, MAIN_COLS, N_LIMBS>(&mut lv, &aux, &mut cur_col);
                 write_quot(&mut lv, &quot, &mut cur_col);
                 write_u256(&mut lv, &modulus, &mut cur_col);
-                assert!(cur_col == 10 * N_LIMBS - 2);
+                assert!(cur_col == START_INSTRUCTION);
 
                 let mut nv = [F::ZERO; MAIN_COLS];
                 let mut cur_col = 0;
@@ -286,7 +287,7 @@ mod tests {
                 }
                 assert!(cur_col == 2 * N_LIMBS);
 
-                cur_col = 10 * N_LIMBS - 2;
+                cur_col = START_INSTRUCTION;
                 let next_square_instruction = next_instruction(&square_instruction, F::ZERO);
                 let next_mul_instruction = next_instruction(&mul_instruction, F::ZERO);
                 let next_no_instruction = next_instruction(&no_instruction, F::ONE);
@@ -370,7 +371,7 @@ mod tests {
             cur_col = 0;
             let next_x: [_; N_LIMBS] = read_u256(&nv, &mut cur_col);
             let next_y: [_; N_LIMBS] = read_u256(&nv, &mut cur_col);
-            cur_col = 10 * N_LIMBS - 2;
+            cur_col = START_INSTRUCTION;
             let next_square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
             let next_mul_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
             let next_no_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
@@ -483,7 +484,7 @@ mod tests {
             cur_col = 0;
             let next_x: [_; N_LIMBS] = read_u256(&nv, &mut cur_col);
             let next_y: [_; N_LIMBS] = read_u256(&nv, &mut cur_col);
-            cur_col = 10 * N_LIMBS - 2;
+            cur_col = START_INSTRUCTION;
             let next_square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
             let next_mul_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
             let next_no_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
