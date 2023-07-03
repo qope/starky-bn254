@@ -882,6 +882,7 @@ dependencies = [
  "ark-ec",
  "ark-ff",
  "ark-std",
+ "bitvec",
  "env_logger",
  "ethereum-types",
  "itertools",

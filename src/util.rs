@@ -1,8 +1,8 @@
 use core::ops::*;
 
 use alloc::vec::Vec;
-
 use ark_bn254::{Fq, Fq12};
+use bitvec::prelude::*;
 use ethereum_types::U256;
 use itertools::Itertools;
 use num_bigint::{BigInt, BigUint, Sign};
@@ -23,6 +23,19 @@ pub const BN_BASE: U256 = U256([
     13281191951274694749,
     3486998266802970665,
 ]);
+
+pub fn biguint_to_bits(x: &BigUint, len: usize) -> Vec<bool> {
+    let limbs = x.to_bytes_le();
+    let mut bits = vec![];
+    for limb in limbs {
+        let limb_bits = limb.view_bits::<Lsb0>().iter().map(|b| *b).collect_vec();
+        bits.extend(limb_bits);
+    }
+    assert!(bits.len() <= len);
+    let to_padd = vec![false; len - bits.len()];
+    bits.extend(to_padd);
+    bits
+}
 
 pub fn columns_to_bigint<const N: usize>(limbs: &[i64; N]) -> BigInt {
     const BASE: i64 = 1i64 << LIMB_BITS;

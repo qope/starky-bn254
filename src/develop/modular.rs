@@ -290,7 +290,7 @@ mod tests {
 
     use crate::{
         config::StarkConfig,
-        constants::LIMB_BITS,
+        constants::{LIMB_BITS, N_LIMBS},
         constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
         develop::modular::{read_quot, write_modulus_aux, write_quot, write_u256},
         lookup::{eval_lookups, eval_lookups_circuit, generate_range_checks},
@@ -311,7 +311,7 @@ mod tests {
 
     use super::{
         generate_modular_op, modular_constr_poly, modular_constr_poly_ext_circuit,
-        read_modulus_aux, read_u256, ModulusAux, N_LIMBS,
+        read_modulus_aux, read_u256, ModulusAux,
     };
 
     const NUM_ARITH_COLUMS: usize = 11 * N_LIMBS - 1;
