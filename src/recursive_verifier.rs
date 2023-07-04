@@ -90,16 +90,17 @@ fn verify_stark_proof_with_challenges_circuit<
         permutation_zs_next,
         quotient_polys,
     } = &proof.openings;
-    let vars = StarkEvaluationTargets {
-        local_values: &local_values.to_vec().try_into().unwrap(),
-        next_values: &next_values.to_vec().try_into().unwrap(),
-        public_inputs: &public_inputs
-            .into_iter()
-            .map(|t| builder.convert_to_ext(t))
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap(),
-    };
+    let vars: StarkEvaluationTargets<'_, D, { S::COLUMNS }, { S::PUBLIC_INPUTS }> =
+        StarkEvaluationTargets {
+            local_values: &local_values.to_vec().try_into().unwrap(),
+            next_values: &next_values.to_vec().try_into().unwrap(),
+            public_inputs: &public_inputs
+                .into_iter()
+                .map(|t| builder.convert_to_ext(t))
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap(),
+        };
 
     let zeta_pow_deg = builder.exp_power_of_2_extension(challenges.stark_zeta, degree_bits);
     let z_h_zeta = builder.sub_extension(zeta_pow_deg, one);

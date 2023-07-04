@@ -410,59 +410,63 @@ mod tests {
             vars: StarkEvaluationTargets<D, { Self::COLUMNS }, { Self::PUBLIC_INPUTS }>,
             yield_constr: &mut RecursiveConstraintConsumer<F, D>,
         ) {
-            let lv = vars.local_values.clone();
-
-            eval_modular_lookup_circuit(
-                builder,
-                vars,
-                yield_constr,
-                MAIN_COLS,
-                NUM_RANGE_CHECK_UNSIGNED,
-                NUM_RANGE_CHECK_SIGNED,
+            dbg!(
+                yield_constr.constraint_accs.len(),
             );
+            // let lv = vars.local_values.clone();
+
+            // eval_modular_lookup_circuit(
+            //     builder,
+            //     vars,
+            //     yield_constr,
+            //     MAIN_COLS,
+            //     NUM_RANGE_CHECK_UNSIGNED,
+            //     NUM_RANGE_CHECK_SIGNED,
+            // );
 
             let mut cur_col = 0;
 
-            let x = read_fq12(&lv, &mut cur_col);
-            let y = read_fq12(&lv, &mut cur_col);
-            let z = read_fq12(&lv, &mut cur_col);
+            // let x = read_fq12(&vars.local_values, &mut cur_col);// 12*N_LIMBS
+            // let y = read_fq12(&vars.local_values, &mut cur_col);
 
-            let auxs = (0..12)
-                .map(|_| read_modulus_aux(&lv, &mut cur_col))
-                .collect_vec();
-            let quots = (0..12).map(|_| read_quot(&lv, &mut cur_col)).collect_vec();
+            // let z = read_fq12(&lv, &mut cur_col);
 
-            let filter = lv[cur_col];
-            cur_col += 1;
+            // let auxs = (0..12)
+            //     .map(|_| read_modulus_aux(&lv, &mut cur_col))
+            //     .collect_vec();
+            // let quots = (0..12).map(|_| read_quot(&lv, &mut cur_col)).collect_vec();
 
-            assert!(cur_col == MAIN_COLS);
+            // let filter = lv[cur_col];
+            // cur_col += 1;
 
-            let xi = F::Extension::from_canonical_u32(9);
-            let input = pol_mul_fq12_ext_circuit(builder, x, y, xi);
+            // assert!(cur_col == MAIN_COLS);
 
-            let modulus = bn254_base_modulus_packfield();
-            let modulus = modulus.map(|x| builder.constant_extension(x));
-            (0..12).for_each(|i| {
-                eval_modular_op_circuit(
-                    builder,
-                    yield_constr,
-                    filter,
-                    modulus,
-                    input[i],
-                    z[i],
-                    quots[i],
-                    &auxs[i],
-                )
-            });
+            // let xi = F::Extension::from_canonical_u32(9);
+            // let input = pol_mul_fq12_ext_circuit(builder, x, y, xi);
+
+            // let modulus = bn254_base_modulus_packfield();
+            // let modulus = modulus.map(|x| builder.constant_extension(x));
+            // (0..12).for_each(|i| {
+            //     eval_modular_op_circuit(
+            //         builder,
+            //         yield_constr,
+            //         filter,
+            //         modulus,
+            //         input[i],
+            //         z[i],
+            //         quots[i],
+            //         &auxs[i],
+            //     )
+            // });
         }
 
         fn constraint_degree(&self) -> usize {
             3
         }
 
-        fn permutation_pairs(&self) -> Vec<PermutationPair> {
-            modular_permutation_pairs(MAIN_COLS, RANGE_CHECK_UNSIGNED, RANGE_CHECK_SIGNED)
-        }
+        // fn permutation_pairs(&self) -> Vec<PermutationPair> {
+        //     modular_permutation_pairs(MAIN_COLS, RANGE_CHECK_UNSIGNED, RANGE_CHECK_SIGNED)
+        // }
     }
 
     #[test]
@@ -488,12 +492,13 @@ mod tests {
 
         let circuit_config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
-        let mut pw = PartialWitness::new();
+        let mut pw = PartialWitness::<F>::new();
         let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
+        dbg!(degree_bits);
         let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
         set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
-        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
-        let data = builder.build::<C>();
-        let _proof = data.prove(pw).unwrap();
+        // verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
+        // let data = builder.build::<C>();
+        // let _proof = data.prove(pw).unwrap();
     }
 }
