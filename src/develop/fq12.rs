@@ -171,7 +171,7 @@ pub fn write_fq12<F: Copy, const NUM_COL: usize>(
 
 /// 12*N_LIMBS
 pub fn read_fq12<F: Copy + Debug, const NUM_COL: usize>(
-    lv: &[F],
+    lv: &[F; NUM_COL],
     cur_col: &mut usize,
 ) -> Vec<[F; N_LIMBS]> {
     (0..12).map(|_| read_u256(lv, cur_col)).collect_vec()
@@ -201,13 +201,12 @@ mod tests {
     use ark_bn254::{Fq, Fq12};
     use ark_std::UniformRand;
     use itertools::Itertools;
-    use num::FromPrimitive;
-    use num_bigint::{BigInt, BigUint};
     use plonky2::{
         field::{
             extension::{Extendable, FieldExtension},
             packed::PackedField,
             polynomial::PolynomialValues,
+            types::Field,
         },
         hash::hash_types::RichField,
         iop::witness::PartialWitness,
@@ -226,8 +225,9 @@ mod tests {
         develop::{
             fq12::{generate_fq12_modular_op, pol_mul_fq12, pol_mul_fq12_ext_circuit, write_fq12},
             modular::{
-                generate_modular_range_check, modular_permutation_pairs, read_quot,
-                write_modulus_aux, write_quot, write_u256,
+                bn254_base_modulus_packfield, eval_modular_lookup, eval_modular_lookup_circuit,
+                eval_modular_op, eval_modular_op_circuit, generate_modular_range_check,
+                modular_permutation_pairs, read_quot, write_modulus_aux, write_quot, write_u256,
             },
         },
         develop::{
@@ -253,6 +253,8 @@ mod tests {
         generate_modular_op, modular_constr_poly, modular_constr_poly_ext_circuit,
         read_modulus_aux, read_u256, ModulusAux,
     };
+
+    use super::read_fq12;
 
     const MAIN_COLS: usize = 168 * N_LIMBS - 47;
     const ROWS: usize = 1 << 9;
@@ -359,65 +361,47 @@ mod tests {
             FE: FieldExtension<D2, BaseField = F>,
             P: PackedField<Scalar = FE>,
         {
-            // let lv = vars.local_values.clone();
+            let lv = vars.local_values.clone();
 
-            // for i in (MAIN_COLS + 1..MAIN_COLS + 1 + 2 * RANGE32_COLS).step_by(2) {
-            //     eval_lookups(vars, yield_constr, i, i + 1);
-            // }
+            eval_modular_lookup(
+                vars,
+                yield_constr,
+                MAIN_COLS,
+                NUM_RANGE_CHECK_UNSIGNED,
+                NUM_RANGE_CHECK_SIGNED,
+            );
 
-            // let mut cur_col = 0;
+            let mut cur_col = 0;
 
-            // let input0_coeffs = (0..12).map(|_| read_u256(&lv, &mut cur_col)).collect_vec();
-            // let input1_coeffs = (0..12).map(|_| read_u256(&lv, &mut cur_col)).collect_vec();
-            // let output_coeffs = (0..12).map(|_| read_u256(&lv, &mut cur_col)).collect_vec();
+            let x = read_fq12(&lv, &mut cur_col);
+            let y = read_fq12(&lv, &mut cur_col);
+            let z = read_fq12(&lv, &mut cur_col);
 
-            // let auxs = (0..12)
-            //     .map(|_| read_modulus_aux(&lv, &mut cur_col))
-            //     .collect_vec();
+            let auxs = (0..12)
+                .map(|_| read_modulus_aux(&lv, &mut cur_col))
+                .collect_vec();
+            let quots = (0..12).map(|_| read_quot(&lv, &mut cur_col)).collect_vec();
 
-            // let quots = (0..12).map(|_| read_quot(&lv, &mut cur_col)).collect_vec();
-            // let modulus: [_; N_LIMBS] = read_u256(&lv, &mut cur_col);
+            let filter = lv[cur_col];
+            cur_col += 1;
 
-            // let filter = lv[cur_col];
-            // cur_col += 1;
+            assert!(cur_col == MAIN_COLS);
 
-            // assert!(cur_col == MAIN_COLS);
+            let xi: P = P::Scalar::from_canonical_u32(9).into();
+            let input = pol_mul_fq12(x, y, xi);
 
-            // let xi: P = P::ONES
-            //     + P::ONES
-            //     + P::ONES
-            //     + P::ONES
-            //     + P::ONES
-            //     + P::ONES
-            //     + P::ONES
-            //     + P::ONES
-            //     + P::ONES;
-            // let input_coeffs = pol_mul_fq12(input0_coeffs, input1_coeffs, xi);
-
-            // for i in 0..12 {
-            //     let ModulusAux {
-            //         out_aux_red,
-            //         aux_input_lo,
-            //         aux_input_hi,
-            //     } = auxs[i];
-
-            //     let constr_poly = modular_constr_poly::<P>(
-            //         yield_constr,
-            //         filter,
-            //         modulus,
-            //         output_coeffs[i],
-            //         out_aux_red,
-            //         quots[i],
-            //         aux_input_lo,
-            //         aux_input_hi,
-            //     );
-
-            //     let mut constr_poly_copy = constr_poly;
-            //     pol_sub_assign(&mut constr_poly_copy, &input_coeffs[i]);
-            //     for &c in constr_poly_copy.iter() {
-            //         yield_constr.constraint(filter * c);
-            //     }
-            // }
+            let modulus = bn254_base_modulus_packfield();
+            (0..12).for_each(|i| {
+                eval_modular_op(
+                    yield_constr,
+                    filter,
+                    modulus,
+                    input[i],
+                    z[i],
+                    quots[i],
+                    &auxs[i],
+                )
+            });
         }
 
         fn eval_ext_circuit(
@@ -426,7 +410,50 @@ mod tests {
             vars: StarkEvaluationTargets<D, { Self::COLUMNS }, { Self::PUBLIC_INPUTS }>,
             yield_constr: &mut RecursiveConstraintConsumer<F, D>,
         ) {
-            todo!()
+            let lv = vars.local_values.clone();
+
+            eval_modular_lookup_circuit(
+                builder,
+                vars,
+                yield_constr,
+                MAIN_COLS,
+                NUM_RANGE_CHECK_UNSIGNED,
+                NUM_RANGE_CHECK_SIGNED,
+            );
+
+            let mut cur_col = 0;
+
+            let x = read_fq12(&lv, &mut cur_col);
+            let y = read_fq12(&lv, &mut cur_col);
+            let z = read_fq12(&lv, &mut cur_col);
+
+            let auxs = (0..12)
+                .map(|_| read_modulus_aux(&lv, &mut cur_col))
+                .collect_vec();
+            let quots = (0..12).map(|_| read_quot(&lv, &mut cur_col)).collect_vec();
+
+            let filter = lv[cur_col];
+            cur_col += 1;
+
+            assert!(cur_col == MAIN_COLS);
+
+            let xi = F::Extension::from_canonical_u32(9);
+            let input = pol_mul_fq12_ext_circuit(builder, x, y, xi);
+
+            let modulus = bn254_base_modulus_packfield();
+            let modulus = modulus.map(|x| builder.constant_extension(x));
+            (0..12).for_each(|i| {
+                eval_modular_op_circuit(
+                    builder,
+                    yield_constr,
+                    filter,
+                    modulus,
+                    input[i],
+                    z[i],
+                    quots[i],
+                    &auxs[i],
+                )
+            });
         }
 
         fn constraint_degree(&self) -> usize {
@@ -448,27 +475,25 @@ mod tests {
         let inner_config = StarkConfig::standard_fast_config();
         let stark = S::new();
         let trace = stark.generate_trace();
-        // let public_inputs = vec![];
-        // let inner_proof = prove::<F, C, S, D>(
-        //     stark,
-        //     &inner_config,
-        //     trace,
-        //     public_inputs.try_into().unwrap(),
-        //     &mut TimingTree::default(),
-        // )
-        // .unwrap();
-        // verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
+        let public_inputs = vec![];
+        let inner_proof = prove::<F, C, S, D>(
+            stark,
+            &inner_config,
+            trace,
+            public_inputs.try_into().unwrap(),
+            &mut TimingTree::default(),
+        )
+        .unwrap();
+        verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
 
-        // let circuit_config = CircuitConfig::standard_recursion_config();
-        // let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
-        // let mut pw = PartialWitness::new();
-        // let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
-        // let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
-        // set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
-
-        // verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
-
-        // let data = builder.build::<C>();
-        // let _proof = data.prove(pw).unwrap();
+        let circuit_config = CircuitConfig::standard_recursion_config();
+        let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
+        let mut pw = PartialWitness::new();
+        let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
+        let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
+        set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
+        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
+        let data = builder.build::<C>();
+        let _proof = data.prove(pw).unwrap();
     }
 }

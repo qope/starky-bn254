@@ -29,6 +29,7 @@ use crate::{
 };
 
 use super::addcy::{eval_ext_circuit_addcy, eval_packed_generic_addcy};
+use super::utils::pol_sub_assign_ext_circuit;
 
 use crate::develop::constants::{LIMB_BITS, N_LIMBS};
 
@@ -216,6 +217,43 @@ pub fn modular_constr_poly_ext_circuit<F: RichField + Extendable<D>, const D: us
     pol_add_assign_ext_circuit(builder, &mut constr_poly, &t);
 
     constr_poly
+}
+
+pub fn eval_modular_op<P: PackedField>(
+    yield_constr: &mut ConstraintConsumer<P>,
+    filter: P,
+    modulus: [P; N_LIMBS],
+    input: [P; 2 * N_LIMBS - 1],
+    output: [P; N_LIMBS],
+    quot: [P; 2 * N_LIMBS],
+    aux: &ModulusAux<P>,
+) {
+    let constr_poly = modular_constr_poly(yield_constr, filter, modulus, output, quot, &aux);
+    let mut constr_poly_copy = constr_poly;
+    pol_sub_assign(&mut constr_poly_copy, &input);
+    for &c in constr_poly_copy.iter() {
+        yield_constr.constraint(filter * c);
+    }
+}
+
+pub fn eval_modular_op_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+    filter: ExtensionTarget<D>,
+    modulus: [ExtensionTarget<D>; N_LIMBS],
+    input: [ExtensionTarget<D>; 2 * N_LIMBS - 1],
+    output: [ExtensionTarget<D>; N_LIMBS],
+    quot: [ExtensionTarget<D>; 2 * N_LIMBS],
+    aux: &ModulusAux<ExtensionTarget<D>>,
+) {
+    let constr_poly =
+        modular_constr_poly_ext_circuit(builder, yield_constr, filter, modulus, output, quot, &aux);
+    let mut constr_poly_copy = constr_poly;
+    pol_sub_assign_ext_circuit(builder, &mut constr_poly_copy, &input);
+    for &c in constr_poly_copy.iter() {
+        let t = builder.mul_extension(filter, c);
+        yield_constr.constraint(builder, t);
+    }
 }
 
 /// N_LIMBS
@@ -484,7 +522,10 @@ mod tests {
     use crate::{
         config::StarkConfig,
         constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
-        develop::constants::{LIMB_BITS, N_LIMBS},
+        develop::{
+            constants::{LIMB_BITS, N_LIMBS},
+            modular::{eval_modular_op, eval_modular_op_circuit},
+        },
         develop::{
             modular::{
                 bn254_base_modulus_bigint, bn254_base_modulus_packfield, eval_modular_lookup,
@@ -625,22 +666,16 @@ mod tests {
             cur_col += 1;
             assert!(cur_col == MAIN_COLS);
 
-            let constr_poly = modular_constr_poly(
+            let input = pol_mul_wide(input0, input1);
+            eval_modular_op(
                 yield_constr,
                 filter,
                 bn254_base_modulus_packfield(),
+                input,
                 output,
                 quot,
                 &aux,
             );
-
-            let mul_input = pol_mul_wide(input0, input1);
-
-            let mut constr_poly_copy = constr_poly;
-            pol_sub_assign(&mut constr_poly_copy, &mul_input);
-            for &c in constr_poly_copy.iter() {
-                yield_constr.constraint(filter * c);
-            }
         }
 
         fn eval_ext_circuit(
@@ -676,24 +711,17 @@ mod tests {
             cur_col += 1;
             assert!(cur_col == MAIN_COLS);
 
-            let constr_poly = modular_constr_poly_ext_circuit(
+            let input = pol_mul_wide_ext_circuit(builder, input0, input1);
+            eval_modular_op_circuit(
                 builder,
                 yield_constr,
                 filter,
                 modulus,
+                input,
                 output,
                 quot,
                 &aux,
             );
-
-            let mul_input = pol_mul_wide_ext_circuit(builder, input0, input1);
-
-            let mut constr_poly_copy = constr_poly;
-            pol_sub_assign_ext_circuit(builder, &mut constr_poly_copy, &mul_input);
-            for &c in constr_poly_copy.iter() {
-                let t = builder.mul_extension(filter, c);
-                yield_constr.constraint(builder, t);
-            }
         }
 
         fn constraint_degree(&self) -> usize {
