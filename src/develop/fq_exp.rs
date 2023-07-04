@@ -114,8 +114,12 @@ mod tests {
     use crate::develop::fq_exp::eval_instruction_ext_circuit;
     use crate::{
         config::StarkConfig,
-        constants::{LIMB_BITS, N_LIMBS},
         constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
+        develop::constants::{LIMB_BITS, N_LIMBS},
+        develop::utils::{
+            bigint_to_columns, biguint_to_bits, columns_to_bigint, fq_to_columns, pol_mul_wide,
+            pol_mul_wide_ext_circuit, pol_sub_assign, pol_sub_assign_ext_circuit,
+        },
         develop::{
             fq_exp::{eval_instruction, next_instruction, read_instruction, write_instruction},
             modular::{read_quot, write_modulus_aux, write_quot, write_u256},
@@ -128,10 +132,6 @@ mod tests {
             verify_stark_proof_circuit,
         },
         stark::Stark,
-        util::{
-            bigint_to_columns, biguint_to_bits, columns_to_bigint, fq_to_columns, pol_mul_wide,
-            pol_mul_wide_ext_circuit, pol_sub_assign, pol_sub_assign_ext_circuit,
-        },
         vars::{StarkEvaluationTargets, StarkEvaluationVars},
         verifier::verify_stark_proof,
     };
@@ -234,8 +234,8 @@ mod tests {
             let range_max = 1 << LIMB_BITS;
             for _ in 0..range_max {
                 let mut cur_col = 0;
-                x = read_u256::<_, N_LIMBS>(&lv, &mut cur_col).map(|a| a.to_canonical_u64() as i64);
-                y = read_u256::<_, N_LIMBS>(&lv, &mut cur_col).map(|a| a.to_canonical_u64() as i64);
+                x = read_u256(&lv, &mut cur_col).map(|a| a.to_canonical_u64() as i64);
+                y = read_u256(&lv, &mut cur_col).map(|a| a.to_canonical_u64() as i64);
                 assert!(cur_col == 2 * N_LIMBS);
 
                 // spare room for aux(5*N_LIMBS - 2) and quot(2*N_LIMBS)
@@ -266,7 +266,7 @@ mod tests {
                 let (output, quot, aux) = generate_modular_op(modulus_bigint.clone(), input);
 
                 cur_col = 2 * N_LIMBS;
-                write_modulus_aux::<_, MAIN_COLS, N_LIMBS>(&mut lv, &aux, &mut cur_col);
+                write_modulus_aux(&mut lv, &aux, &mut cur_col);
                 write_quot(&mut lv, &quot, &mut cur_col);
                 write_u256(&mut lv, &modulus, &mut cur_col);
                 assert!(cur_col == START_INSTRUCTION);
@@ -359,8 +359,8 @@ mod tests {
 
             let cur_x: [_; N_LIMBS] = read_u256(&lv, &mut cur_col);
             let cur_y: [_; N_LIMBS] = read_u256(&lv, &mut cur_col);
-            let aux = read_modulus_aux::<_, N_LIMBS>(&lv, &mut cur_col);
-            let quot = read_quot::<_, { 2 * N_LIMBS }>(&lv, &mut cur_col);
+            let aux = read_modulus_aux(&lv, &mut cur_col);
+            let quot = read_quot(&lv, &mut cur_col);
             let modulus: [_; N_LIMBS] = read_u256(&lv, &mut cur_col);
             let cur_square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
             let cur_mul_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
@@ -472,8 +472,8 @@ mod tests {
 
             let cur_x: [_; N_LIMBS] = read_u256(&lv, &mut cur_col);
             let cur_y: [_; N_LIMBS] = read_u256(&lv, &mut cur_col);
-            let aux = read_modulus_aux::<_, N_LIMBS>(&lv, &mut cur_col);
-            let quot = read_quot::<_, { 2 * N_LIMBS }>(&lv, &mut cur_col);
+            let aux = read_modulus_aux(&lv, &mut cur_col);
+            let quot = read_quot(&lv, &mut cur_col);
             let modulus: [_; N_LIMBS] = read_u256(&lv, &mut cur_col);
             let cur_square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
             let cur_mul_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);

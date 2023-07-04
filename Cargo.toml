@@ -3,11 +3,8 @@ name = "starky"
 description = "Implementation of STARKs"
 version = "0.1.1"
 license = "MIT OR Apache-2.0"
-authors = ["Daniel Lubarov <daniel@lubarov.com>", "William Borgeaud <williamborgeaud@gmail.com>"]
+authors = ["qope", "Daniel Lubarov <daniel@lubarov.com>", "William Borgeaud <williamborgeaud@gmail.com>"]
 readme = "README.md"
-repository = "https://github.com/mir-protocol/plonky2"
-keywords = ["cryptography", "STARK", "FRI"]
-categories = ["cryptography"]
 edition = "2021"
 
 [features]
@@ -23,7 +20,6 @@ log = { version = "0.4.14", default-features = false }
 plonky2_maybe_rayon = { version = "0.1.0", default-features = false }
 plonky2 = { version = "0.1.2", default-features = false }
 static_assertions = "1.1.0"
-ethereum-types = "0.14.0"
 num = "0.4.0"
 num-bigint = "0.4.3"
 rand = "0.8.5"

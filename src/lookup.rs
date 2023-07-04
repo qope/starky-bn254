@@ -120,27 +120,6 @@ pub fn permuted_cols<F: PrimeField64>(inputs: &[F], table: &[F]) -> (Vec<F>, Vec
     (sorted_inputs, permuted_table)
 }
 
-pub fn generate_range_checks<F: PrimeField64>(
-    range_max: usize,
-    cols: &Vec<Vec<F>>,
-) -> (Vec<F>, Vec<(Vec<F>, Vec<F>)>) {
-    let n_rows = cols[0].len();
-    debug_assert!(cols.iter().all(|col| col.len() == n_rows));
-
-    let mut table = Vec::with_capacity(n_rows);
-    for i in 0..range_max {
-        table.push(F::from_canonical_usize(i));
-    }
-    for _ in range_max..n_rows {
-        table.push(F::from_canonical_usize(range_max - 1));
-    }
-    let mut pairs = vec![];
-    for c in cols {
-        let (col_perm, table_perm) = permuted_cols(&c, &table);
-        pairs.push((col_perm, table_perm));
-    }
-    (table, pairs)
-}
 
 #[cfg(test)]
 mod tests {

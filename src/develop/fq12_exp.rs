@@ -28,8 +28,12 @@ use crate::develop::fq_exp::eval_instruction_ext_circuit;
 use crate::native::MyFq12;
 use crate::{
     config::StarkConfig,
-    constants::{LIMB_BITS, N_LIMBS},
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
+    develop::constants::{LIMB_BITS, N_LIMBS},
+    develop::utils::{
+        bigint_to_columns, biguint_to_bits, columns_to_bigint, fq_to_columns, pol_mul_wide,
+        pol_mul_wide_ext_circuit, pol_sub_assign, pol_sub_assign_ext_circuit,
+    },
     develop::{
         fq_exp::{eval_instruction, next_instruction, read_instruction, write_instruction},
         modular::{read_quot, write_modulus_aux, write_quot, write_u256},
@@ -42,10 +46,6 @@ use crate::{
         verify_stark_proof_circuit,
     },
     stark::Stark,
-    util::{
-        bigint_to_columns, biguint_to_bits, columns_to_bigint, fq_to_columns, pol_mul_wide,
-        pol_mul_wide_ext_circuit, pol_sub_assign, pol_sub_assign_ext_circuit,
-    },
     vars::{StarkEvaluationTargets, StarkEvaluationVars},
     verifier::verify_stark_proof,
 };
@@ -176,14 +176,10 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
         for _ in 0..range_max {
             let mut cur_col = 0;
             x_coeffs = (0..12)
-                .map(|_| {
-                    read_u256::<_, N_LIMBS>(&lv, &mut cur_col).map(|a| a.to_canonical_u64() as i64)
-                })
+                .map(|_| read_u256(&lv, &mut cur_col).map(|a| a.to_canonical_u64() as i64))
                 .collect_vec();
             y_coeffs = (0..12)
-                .map(|_| {
-                    read_u256::<_, N_LIMBS>(&lv, &mut cur_col).map(|a| a.to_canonical_u64() as i64)
-                })
+                .map(|_| read_u256(&lv, &mut cur_col).map(|a| a.to_canonical_u64() as i64))
                 .collect_vec();
             assert!(cur_col == 24 * N_LIMBS);
 
@@ -229,7 +225,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
             // 12*(5*N_LIMBS-2) = 60*N_LIMBS - 24
             // thus, RANGE32_COLS = 84*N_LIMBS - 24
             auxs.iter().for_each(|aux| {
-                write_modulus_aux::<_, MAIN_COLS, N_LIMBS>(&mut lv, &aux, &mut cur_col);
+                write_modulus_aux(&mut lv, &aux, &mut cur_col);
             });
             // 12*(2*N_LIMBS) = 24*N_LIMBS
             quots.iter().for_each(|quot| {
@@ -367,19 +363,13 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
 
         let mut cur_col = 0;
 
-        let cur_x_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-            .collect_vec();
-        let cur_y_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-            .collect_vec();
+        let cur_x_coeffs = (0..12).map(|_| read_u256(&lv, &mut cur_col)).collect_vec();
+        let cur_y_coeffs = (0..12).map(|_| read_u256(&lv, &mut cur_col)).collect_vec();
 
         let auxs = (0..12)
-            .map(|_| read_modulus_aux::<_, N_LIMBS>(&lv, &mut cur_col))
+            .map(|_| read_modulus_aux(&lv, &mut cur_col))
             .collect_vec();
-        let quots = (0..12)
-            .map(|_| read_quot::<_, { 2 * N_LIMBS }>(&lv, &mut cur_col))
-            .collect_vec();
+        let quots = (0..12).map(|_| read_quot(&lv, &mut cur_col)).collect_vec();
         let modulus: [_; N_LIMBS] = read_u256(&lv, &mut cur_col);
 
         let cur_square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
@@ -389,12 +379,8 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         assert!(cur_col == MAIN_COLS);
 
         cur_col = 0;
-        let next_x_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&nv, &mut cur_col))
-            .collect_vec();
-        let next_y_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&nv, &mut cur_col))
-            .collect_vec();
+        let next_x_coeffs = (0..12).map(|_| read_u256(&nv, &mut cur_col)).collect_vec();
+        let next_y_coeffs = (0..12).map(|_| read_u256(&nv, &mut cur_col)).collect_vec();
         cur_col = START_INSTRUCTION;
         let next_square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
         let next_mul_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
@@ -512,19 +498,13 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
 
         let mut cur_col = 0;
 
-        let cur_x_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-            .collect_vec();
-        let cur_y_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-            .collect_vec();
+        let cur_x_coeffs = (0..12).map(|_| read_u256(&lv, &mut cur_col)).collect_vec();
+        let cur_y_coeffs = (0..12).map(|_| read_u256(&lv, &mut cur_col)).collect_vec();
 
         let auxs = (0..12)
-            .map(|_| read_modulus_aux::<_, N_LIMBS>(&lv, &mut cur_col))
+            .map(|_| read_modulus_aux(&lv, &mut cur_col))
             .collect_vec();
-        let quots = (0..12)
-            .map(|_| read_quot::<_, { 2 * N_LIMBS }>(&lv, &mut cur_col))
-            .collect_vec();
+        let quots = (0..12).map(|_| read_quot(&lv, &mut cur_col)).collect_vec();
         let modulus: [_; N_LIMBS] = read_u256(&lv, &mut cur_col);
 
         let cur_square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
@@ -534,12 +514,8 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         assert!(cur_col == MAIN_COLS);
 
         cur_col = 0;
-        let next_x_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&nv, &mut cur_col))
-            .collect_vec();
-        let next_y_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&nv, &mut cur_col))
-            .collect_vec();
+        let next_x_coeffs = (0..12).map(|_| read_u256(&nv, &mut cur_col)).collect_vec();
+        let next_y_coeffs = (0..12).map(|_| read_u256(&nv, &mut cur_col)).collect_vec();
         cur_col = START_INSTRUCTION;
         let next_square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
         let next_mul_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);

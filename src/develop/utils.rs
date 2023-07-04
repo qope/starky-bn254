@@ -3,7 +3,6 @@ use core::ops::*;
 use alloc::vec::Vec;
 use ark_bn254::{Fq, Fq12};
 use bitvec::prelude::*;
-use ethereum_types::U256;
 use itertools::Itertools;
 use num_bigint::{BigInt, BigUint, Sign};
 use plonky2::field::extension::Extendable;
@@ -14,15 +13,8 @@ use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::util::transpose;
 
-use crate::constants::{LIMB_BITS, N_LIMBS};
+use crate::develop::constants::N_LIMBS;
 use crate::native::MyFq12;
-
-pub const BN_BASE: U256 = U256([
-    4332616871279656263,
-    10917124144477883021,
-    13281191951274694749,
-    3486998266802970665,
-]);
 
 pub fn biguint_to_bits(x: &BigUint, len: usize) -> Vec<bool> {
     let limbs = x.to_bytes_le();
@@ -38,13 +30,17 @@ pub fn biguint_to_bits(x: &BigUint, len: usize) -> Vec<bool> {
 }
 
 pub fn columns_to_bigint<const N: usize>(limbs: &[i64; N]) -> BigInt {
-    const BASE: i64 = 1i64 << LIMB_BITS;
+    const BASE: i64 = 1i64 << 8;
 
     let mut pos_limbs_u32 = Vec::with_capacity(N / 2 + 1);
     let mut neg_limbs_u32 = Vec::with_capacity(N / 2 + 1);
     let mut cy = 0i64; // cy is necessary to handle ε > 0
-    for i in 0..(N / 2) {
-        let t = cy + limbs[2 * i] + BASE * limbs[2 * i + 1];
+    for i in 0..(N / 4) {
+        let t = cy
+            + limbs[4 * i]
+            + BASE * limbs[4 * i + 1]
+            + BASE * BASE * limbs[4 * i + 2]
+            + BASE * BASE * BASE * limbs[4 * i + 3];
         pos_limbs_u32.push(if t > 0 { t as u32 } else { 0u32 });
         neg_limbs_u32.push(if t < 0 { -t as u32 } else { 0u32 });
         cy = t / (1i64 << 32); //　繰り上がり
@@ -68,8 +64,10 @@ pub fn bigint_to_columns<const N: usize>(num: &BigInt) -> [i64; N] {
     assert!(num.bits() <= 16 * N as u64);
     let mut output = [0i64; N];
     for (i, limb) in num.iter_u32_digits().enumerate() {
-        output[2 * i] = limb as u16 as i64;
-        output[2 * i + 1] = (limb >> LIMB_BITS) as i64;
+        output[4 * i] = limb as u8 as i64;
+        output[4 * i + 1] = (limb >> 8) as u8 as i64;
+        output[4 * i + 2] = (limb >> 16) as u8 as i64;
+        output[4 * i + 3] = (limb >> 24) as u8 as i64;
     }
     if num.sign() == Sign::Minus {
         for c in output.iter_mut() {
