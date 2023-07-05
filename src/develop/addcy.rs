@@ -12,12 +12,12 @@ use crate::{
 };
 
 /// 2^-8 mod (2^64 - 2^32 + 1)
-const GOLDILOCKS_INVERSE_256: u64 = 18374686475393433601;
+const GOLDILOCKS_INVERSE_65536: u64 = 18446462594437939201;
 
 // 繰り上げの足し算を行う
 pub fn eval_packed_generic_addcy<P: PackedField>(
     yield_constr: &mut ConstraintConsumer<P>,
-    filter: P,
+    filter: P,  
     x: &[P],
     y: &[P],
     z: &[P],
@@ -29,7 +29,7 @@ pub fn eval_packed_generic_addcy<P: PackedField>(
     );
 
     let overflow = P::Scalar::from_canonical_u64(1u64 << LIMB_BITS);
-    let overflow_inv = P::Scalar::from_canonical_u64(GOLDILOCKS_INVERSE_256);
+    let overflow_inv = P::Scalar::from_canonical_u64(GOLDILOCKS_INVERSE_65536);
     assert!(
         overflow * overflow_inv == P::Scalar::ONE,
         "only works with LIMB_BITS=8 and F=Goldilocks"
@@ -78,7 +78,7 @@ pub fn eval_ext_circuit_addcy<F: RichField + Extendable<D>, const D: usize>(
     // 2^LIMB_BITS in the extension field as an ExtensionTarget
     let overflow = builder.constant_extension(F::Extension::from(overflow_base));
     // 2^-LIMB_BITS in the base field.
-    let overflow_inv = F::from_canonical_u64(GOLDILOCKS_INVERSE_256);
+    let overflow_inv = F::from_canonical_u64(GOLDILOCKS_INVERSE_65536);
 
     let mut cy = builder.zero_extension();
     for ((&xi, &yi), &zi) in x.iter().zip_eq(y).zip_eq(z) {

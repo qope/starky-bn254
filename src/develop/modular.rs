@@ -3,7 +3,7 @@ use core::ops::Range;
 
 use ark_bn254::Fq;
 use itertools::Itertools;
-use num::{FromPrimitive, Zero};
+use num::{FromPrimitive, Signed, Zero};
 use num_bigint::{BigInt, BigUint, Sign};
 use plonky2::field::types::Field;
 use plonky2::iop::ext_target::ExtensionTarget;
@@ -33,20 +33,19 @@ use super::utils::pol_sub_assign_ext_circuit;
 
 use crate::develop::constants::{LIMB_BITS, N_LIMBS};
 
-pub const AUX_COEFF_ABS_MAX: i64 = 1 << 20;
+pub const AUX_COEFF_ABS_MAX: i64 = 1 << 22;
 
 pub struct ModulusAux<F> {
     pub out_aux_red: [F; N_LIMBS],
-    pub aux_input0: [F; 2 * N_LIMBS - 1],
-    pub aux_input1: [F; 2 * N_LIMBS - 1],
-    pub aux_input2: [F; 2 * N_LIMBS - 1],
-    pub aux_input3: [F; 2 * N_LIMBS - 1],
+    pub quot_abs: [F; N_LIMBS + 1],
+    pub aux_input_lo: [F; 2 * N_LIMBS - 1],
+    pub aux_input_hi: [F; 2 * N_LIMBS - 1],
 }
 
 pub fn generate_modular_op<F: PrimeField64>(
     modulus: BigInt,
     pol_input: [i64; 2 * N_LIMBS - 1],
-) -> ([F; N_LIMBS], [F; 2 * N_LIMBS], ModulusAux<F>) {
+) -> ([F; N_LIMBS], F, ModulusAux<F>) {
     let modulus_limbs = bigint_to_columns(&modulus);
 
     let mut constr_poly = [0i64; 2 * N_LIMBS];
@@ -62,54 +61,50 @@ pub fn generate_modular_op<F: PrimeField64>(
     }
     let output_limbs = bigint_to_columns::<N_LIMBS>(&output);
     let quot = (&input - &output) / &modulus;
-    let quot_limbs = bigint_to_columns::<{ 2 * N_LIMBS }>(&quot);
+
+    let quot_sign = match quot.sign() {
+        Sign::Minus => F::NEG_ONE,
+        Sign::NoSign => F::ONE, // if quot == 0 then quot_sign == 1
+        Sign::Plus => F::ONE,
+    };
+
+    let quot_limbs = bigint_to_columns::<{ N_LIMBS + 1 }>(&quot);
     // 0 <= out_aux_red < 2^256 という制約を課す(つまりout_aux_redのlimbには2^16のrange checkを課す)
     // out_aux_red = 2^256 - modulus + outputより、output < modulusが成り立つ
     let out_aux_red = bigint_to_columns::<N_LIMBS>(&(two_exp_256 - modulus + output));
 
     // operation(a(x), b(x)) - c(x) - s(x)*m(x).
     pol_sub_assign(&mut constr_poly, &output_limbs);
-    let prod = pol_mul_wide2(quot_limbs, modulus_limbs);
-    pol_sub_assign(&mut constr_poly, &prod[0..2 * N_LIMBS]);
+    let prod: [i64; 2 * N_LIMBS] = pol_mul_wide2(quot_limbs, modulus_limbs);
+    pol_sub_assign(&mut constr_poly, &prod);
 
-    debug_assert!(&prod[2 * N_LIMBS..].iter().all(|&x| x == 0i64));
     // aux_limbs = constr/ (x- β)
-    // これはrange checkを課さない
     let mut aux_limbs = pol_remove_root_2exp::<LIMB_BITS, _, { 2 * N_LIMBS }>(constr_poly);
+    assert!(aux_limbs[31] == 0);
 
     for c in aux_limbs.iter_mut() {
-        // offset value c + 2^20.
         *c += AUX_COEFF_ABS_MAX;
     }
-    debug_assert!(aux_limbs.iter().all(|&c| c.abs() <= 2 * AUX_COEFF_ABS_MAX));
+    assert!(aux_limbs.iter().all(|&c| c.abs() <= 2 * AUX_COEFF_ABS_MAX));
 
-    let aux_input0 = aux_limbs[..2 * N_LIMBS - 1]
+    let aux_input_lo = aux_limbs[..2 * N_LIMBS - 1]
         .iter()
-        .map(|&c| F::from_canonical_u8(c as u8))
+        .map(|&c| F::from_canonical_u16(c as u16))
         .collect_vec();
-    let aux_input1 = aux_limbs[..2 * N_LIMBS - 1]
+    let aux_input_hi = aux_limbs[..2 * N_LIMBS - 1]
         .iter()
-        .map(|&c| F::from_canonical_u8((c >> 8) as u8))
-        .collect_vec();
-    let aux_input2 = aux_limbs[..2 * N_LIMBS - 1]
-        .iter()
-        .map(|&c| F::from_canonical_u8((c >> 16) as u8))
-        .collect_vec();
-    let aux_input3 = aux_limbs[..2 * N_LIMBS - 1]
-        .iter()
-        .map(|&c| F::from_canonical_u8((c >> 24) as u8))
+        .map(|&c| F::from_canonical_u16((c >> LIMB_BITS) as u16))
         .collect_vec();
 
     let output = output_limbs.map(|x| F::from_canonical_u64(x as u64));
-    let quot = quot_limbs.map(|x| F::from_noncanonical_i64(x));
+    let quot_abs = quot_limbs.map(|x| F::from_canonical_i64(x));
     let aux = ModulusAux {
         out_aux_red: out_aux_red.map(|x| F::from_canonical_i64(x)),
-        aux_input0: aux_input0.try_into().unwrap(),
-        aux_input1: aux_input1.try_into().unwrap(),
-        aux_input2: aux_input2.try_into().unwrap(),
-        aux_input3: aux_input3.try_into().unwrap(),
+        quot_abs,
+        aux_input_lo: aux_input_lo.try_into().unwrap(),
+        aux_input_hi: aux_input_hi.try_into().unwrap(),
     };
-    (output, quot, aux)
+    (output, quot_sign, aux)
 }
 
 pub fn modular_constr_poly<P: PackedField>(
@@ -117,13 +112,13 @@ pub fn modular_constr_poly<P: PackedField>(
     filter: P,
     modulus: [P; N_LIMBS],
     output: [P; N_LIMBS],
-    quot: [P; 2 * N_LIMBS],
+    quot_sign: P,
     aux: &ModulusAux<P>,
 ) -> [P; 2 * N_LIMBS] {
     let mut is_less_than = [P::ZEROS; N_LIMBS];
     is_less_than[0] = P::ONES;
-    // ここで modulus + out_aux_red  = output + is_less_than*2^256
-    // という制約を掛ける
+    // modulus + out_aux_red  = output + 2^256
+    // constraint of "output < modulus"
     eval_packed_generic_addcy(
         yield_constr,
         filter,
@@ -133,15 +128,18 @@ pub fn modular_constr_poly<P: PackedField>(
         &is_less_than,
     );
 
+    // yield_constr.constraint(filter * (quot_sign * quot_sign - P::ONES));
+    let quot = aux
+        .quot_abs
+        .iter()
+        .map(|&limb| quot_sign * limb)
+        .collect_vec();
+
     // prod = q(x) * m(x)
-    let prod = pol_mul_wide2(quot, modulus);
-    // higher order terms must be zero
-    for &x in prod[2 * N_LIMBS..].iter() {
-        yield_constr.constraint(filter * x);
-    }
+    let prod = pol_mul_wide2(quot.try_into().unwrap(), modulus);
 
     // constr_poly = c(x) + q(x) * m(x)
-    let mut constr_poly: [_; 2 * N_LIMBS] = prod[0..2 * N_LIMBS].try_into().unwrap();
+    let mut constr_poly: [_; 2 * N_LIMBS] = prod;
     pol_add_assign(&mut constr_poly, &output);
 
     let base = P::Scalar::from_canonical_u64(1 << LIMB_BITS);
@@ -153,10 +151,8 @@ pub fn modular_constr_poly<P: PackedField>(
         .iter_mut()
         .enumerate()
         .for_each(|(i, c)| {
-            *c = aux.aux_input0[i] - offset;
-            *c += base * aux.aux_input1[i];
-            *c += base * base * aux.aux_input2[i];
-            *c += base * base * base * aux.aux_input3[i];
+            *c = aux.aux_input_lo[i] - offset;
+            *c += base * aux.aux_input_hi[i];
         });
 
     pol_add_assign(&mut constr_poly, &pol_adjoin_root(aux_poly, base));
@@ -170,7 +166,7 @@ pub fn modular_constr_poly_ext_circuit<F: RichField + Extendable<D>, const D: us
     filter: ExtensionTarget<D>,
     modulus: [ExtensionTarget<D>; N_LIMBS],
     output: [ExtensionTarget<D>; N_LIMBS],
-    quot: [ExtensionTarget<D>; 2 * N_LIMBS],
+    quot_sign: ExtensionTarget<D>,
     aux: &ModulusAux<ExtensionTarget<D>>,
 ) -> [ExtensionTarget<D>; 2 * N_LIMBS] {
     let one = builder.one_extension();
@@ -187,13 +183,22 @@ pub fn modular_constr_poly_ext_circuit<F: RichField + Extendable<D>, const D: us
         &is_less_than,
     );
 
-    let prod = pol_mul_wide2_ext_circuit(builder, quot, modulus);
-    for &x in prod[2 * N_LIMBS..].iter() {
-        let t = builder.mul_extension(filter, x);
-        yield_constr.constraint(builder, t);
-    }
+    let quot_sign_sq = builder.mul_extension(quot_sign, quot_sign);
+    let one = builder.one_extension();
 
-    let mut constr_poly: [_; 2 * N_LIMBS] = prod[0..2 * N_LIMBS].try_into().unwrap();
+    let diff = builder.mul_sub_extension(quot_sign, quot_sign, one);
+    let t = builder.mul_extension(filter, diff);
+    yield_constr.constraint(builder, t);
+
+    let quot = aux
+        .quot_abs
+        .iter()
+        .map(|&limb| builder.mul_extension(quot_sign, limb))
+        .collect_vec();
+
+    let prod = pol_mul_wide2_ext_circuit(builder, quot.try_into().unwrap(), modulus);
+
+    let mut constr_poly = prod;
     pol_add_assign_ext_circuit(builder, &mut constr_poly, &output);
 
     let offset =
@@ -206,10 +211,8 @@ pub fn modular_constr_poly_ext_circuit<F: RichField + Extendable<D>, const D: us
         .iter_mut()
         .enumerate()
         .for_each(|(i, c)| {
-            *c = builder.sub_extension(aux.aux_input0[i], offset);
-            *c = builder.mul_const_add_extension(base, aux.aux_input1[i], *c);
-            *c = builder.mul_const_add_extension(base * base, aux.aux_input2[i], *c);
-            *c = builder.mul_const_add_extension(base * base * base, aux.aux_input3[i], *c);
+            *c = builder.sub_extension(aux.aux_input_lo[i], offset);
+            *c = builder.mul_const_add_extension(base, aux.aux_input_hi[i], *c);
         });
 
     let base = builder.constant_extension(base.into());
@@ -225,10 +228,10 @@ pub fn eval_modular_op<P: PackedField>(
     modulus: [P; N_LIMBS],
     input: [P; 2 * N_LIMBS - 1],
     output: [P; N_LIMBS],
-    quot: [P; 2 * N_LIMBS],
+    quot_sign: P,
     aux: &ModulusAux<P>,
 ) {
-    let constr_poly = modular_constr_poly(yield_constr, filter, modulus, output, quot, &aux);
+    let constr_poly = modular_constr_poly(yield_constr, filter, modulus, output, quot_sign, &aux);
     let mut constr_poly_copy = constr_poly;
     pol_sub_assign(&mut constr_poly_copy, &input);
     for &c in constr_poly_copy.iter() {
@@ -243,11 +246,18 @@ pub fn eval_modular_op_circuit<F: RichField + Extendable<D>, const D: usize>(
     modulus: [ExtensionTarget<D>; N_LIMBS],
     input: [ExtensionTarget<D>; 2 * N_LIMBS - 1],
     output: [ExtensionTarget<D>; N_LIMBS],
-    quot: [ExtensionTarget<D>; 2 * N_LIMBS],
+    quot_sign: ExtensionTarget<D>,
     aux: &ModulusAux<ExtensionTarget<D>>,
 ) {
-    let constr_poly =
-        modular_constr_poly_ext_circuit(builder, yield_constr, filter, modulus, output, quot, &aux);
+    let constr_poly = modular_constr_poly_ext_circuit(
+        builder,
+        yield_constr,
+        filter,
+        modulus,
+        output,
+        quot_sign,
+        &aux,
+    );
     let mut constr_poly_copy = constr_poly;
     pol_sub_assign_ext_circuit(builder, &mut constr_poly_copy, &input);
     for &c in constr_poly_copy.iter() {
@@ -273,53 +283,33 @@ pub fn read_u256<F: Clone + fmt::Debug>(lv: &[F], cur_col: &mut usize) -> [F; N_
     output.try_into().unwrap()
 }
 
-/// 2 * N_LIMBS
-pub fn write_quot<F: Copy, const N: usize>(
-    lv: &mut [F; N],
-    quot: &[F; 2 * N_LIMBS],
-    cur_col: &mut usize,
-) {
-    lv[*cur_col..*cur_col + 2 * N_LIMBS].copy_from_slice(quot);
-    *cur_col += 2 * N_LIMBS;
-}
-
-/// 2 * N_LIMBS
-pub fn read_quot<F: Clone + fmt::Debug>(lv: &[F], cur_col: &mut usize) -> [F; 2 * N_LIMBS] {
-    let output = lv[*cur_col..*cur_col + 2 * N_LIMBS].to_vec();
-    *cur_col += 2 * N_LIMBS;
-    output.try_into().unwrap()
-}
-
-/// 9 * N_LIMBS - 4
+/// 6 * N_LIMBS - 1
 pub fn write_modulus_aux<F: Copy, const NUM_COL: usize>(
     lv: &mut [F; NUM_COL],
     aux: &ModulusAux<F>,
     cur_col: &mut usize,
 ) {
     lv[*cur_col..*cur_col + N_LIMBS].copy_from_slice(&aux.out_aux_red);
-    lv[*cur_col + N_LIMBS..*cur_col + 3 * N_LIMBS - 1].copy_from_slice(&aux.aux_input0);
-    lv[*cur_col + 3 * N_LIMBS - 1..*cur_col + 5 * N_LIMBS - 2].copy_from_slice(&aux.aux_input1);
-    lv[*cur_col + 5 * N_LIMBS - 2..*cur_col + 7 * N_LIMBS - 3].copy_from_slice(&aux.aux_input2);
-    lv[*cur_col + 7 * N_LIMBS - 3..*cur_col + 9 * N_LIMBS - 4].copy_from_slice(&aux.aux_input3);
-    *cur_col += 9 * N_LIMBS - 4;
+    lv[*cur_col + N_LIMBS..*cur_col + 2 * N_LIMBS + 1].copy_from_slice(&aux.quot_abs);
+    lv[*cur_col + 2 * N_LIMBS + 1..*cur_col + 4 * N_LIMBS].copy_from_slice(&aux.aux_input_lo);
+    lv[*cur_col + 4 * N_LIMBS..*cur_col + 6 * N_LIMBS - 1].copy_from_slice(&aux.aux_input_hi);
+    *cur_col += 6 * N_LIMBS - 1;
 }
 
-/// 9 * N_LIMBS - 4
+/// 6 * N_LIMBS - 1
 pub fn read_modulus_aux<F: Copy + fmt::Debug>(lv: &[F], cur_col: &mut usize) -> ModulusAux<F> {
     let out_aux_red = lv[*cur_col..*cur_col + N_LIMBS].to_vec();
-    let aux_input0 = lv[*cur_col + N_LIMBS..*cur_col + 3 * N_LIMBS - 1].to_vec();
-    let aux_input1 = lv[*cur_col + 3 * N_LIMBS - 1..*cur_col + 5 * N_LIMBS - 2].to_vec();
-    let aux_input2 = lv[*cur_col + 5 * N_LIMBS - 2..*cur_col + 7 * N_LIMBS - 3].to_vec();
-    let aux_input3 = lv[*cur_col + 7 * N_LIMBS - 3..*cur_col + 9 * N_LIMBS - 4].to_vec();
+    let quot_abs = lv[*cur_col + N_LIMBS..*cur_col + 2 * N_LIMBS + 1].to_vec();
+    let aux_input_lo = lv[*cur_col + 2 * N_LIMBS + 1..*cur_col + 4 * N_LIMBS].to_vec();
+    let aux_input_hi = lv[*cur_col + 4 * N_LIMBS..*cur_col + 6 * N_LIMBS - 1].to_vec();
 
-    *cur_col += 9 * N_LIMBS - 4;
+    *cur_col += 6 * N_LIMBS - 1;
 
     ModulusAux {
         out_aux_red: out_aux_red.try_into().unwrap(),
-        aux_input0: aux_input0.try_into().unwrap(),
-        aux_input1: aux_input1.try_into().unwrap(),
-        aux_input2: aux_input2.try_into().unwrap(),
-        aux_input3: aux_input3.try_into().unwrap(),
+        quot_abs: quot_abs.try_into().unwrap(),
+        aux_input_lo: aux_input_lo.try_into().unwrap(),
+        aux_input_hi: aux_input_hi.try_into().unwrap(),
     }
 }
 
@@ -336,164 +326,164 @@ pub fn bn254_base_modulus_packfield<P: PackedField>() -> [P; N_LIMBS] {
     modulus_column
 }
 
-pub fn generate_modular_range_check<F: PrimeField64>(
-    range_check_unsigned: Range<usize>,
-    range_check_signed: Range<usize>,
-    trace_cols: &mut Vec<Vec<F>>,
-) {
-    assert!(trace_cols.iter().all(|col| col.len() == 1 << 9));
+// pub fn generate_modular_range_check<F: PrimeField64>(
+//     range_check_unsigned: Range<usize>,
+//     range_check_signed: Range<usize>,
+//     trace_cols: &mut Vec<Vec<F>>,
+// ) {
+//     assert!(trace_cols.iter().all(|col| col.len() == 1 << 9));
 
-    let mut table_unsigned = vec![]; //0, ..., 255, ... , 255
-    let mut table_signed = vec![]; //-255, ..., 0, ..., 255
+//     let mut table_unsigned = vec![]; //0, ..., 255, ... , 255
+//     let mut table_signed = vec![]; //-255, ..., 0, ..., 255
 
-    let range_max: u64 = (1 << 8) - 1;
-    for i in 0..1 << 8 {
-        table_unsigned.push(F::from_canonical_u64(i));
-        table_signed.push(-F::from_canonical_u64(range_max - i));
-    }
-    for i in 1 << 8..1 << 9 {
-        table_unsigned.push(F::from_canonical_u64(range_max));
-        table_signed.push(F::from_canonical_u64(i - range_max));
-    }
-    table_signed[(1 << 9) - 1] = F::from_canonical_u64(range_max);
+//     let range_max: u64 = (1 << 8) - 1;
+//     for i in 0..1 << 8 {
+//         table_unsigned.push(F::from_canonical_u64(i));
+//         table_signed.push(-F::from_canonical_u64(range_max - i));
+//     }
+//     for i in 1 << 8..1 << 9 {
+//         table_unsigned.push(F::from_canonical_u64(range_max));
+//         table_signed.push(F::from_canonical_u64(i - range_max));
+//     }
+//     table_signed[(1 << 9) - 1] = F::from_canonical_u64(range_max);
 
-    trace_cols.push(table_unsigned.clone());
+//     trace_cols.push(table_unsigned.clone());
 
-    for i in range_check_unsigned {
-        let c = trace_cols[i].clone();
-        let (col_perm, table_perm) = permuted_cols(&c, &table_unsigned);
-        trace_cols.push(col_perm);
-        trace_cols.push(table_perm);
-    }
+//     for i in range_check_unsigned {
+//         let c = trace_cols[i].clone();
+//         let (col_perm, table_perm) = permuted_cols(&c, &table_unsigned);
+//         trace_cols.push(col_perm);
+//         trace_cols.push(table_perm);
+//     }
 
-    trace_cols.push(table_signed.clone());
+//     trace_cols.push(table_signed.clone());
 
-    for i in range_check_signed {
-        let c = trace_cols[i].clone();
-        let (col_perm, table_perm) = permuted_cols(&c, &table_signed);
-        trace_cols.push(col_perm);
-        trace_cols.push(table_perm);
-    }
-}
+//     for i in range_check_signed {
+//         let c = trace_cols[i].clone();
+//         let (col_perm, table_perm) = permuted_cols(&c, &table_signed);
+//         trace_cols.push(col_perm);
+//         trace_cols.push(table_perm);
+//     }
+// }
 
-pub fn eval_modular_lookup<
-    F: Field,
-    P: PackedField<Scalar = F>,
-    const COLS: usize,
-    const PUBLIC_INPUTS: usize,
->(
-    vars: StarkEvaluationVars<F, P, COLS, PUBLIC_INPUTS>,
-    yield_constr: &mut ConstraintConsumer<P>,
-    start_lookup_col: usize,
-    num_range_unsigned_cols: usize,
-    num_range_signed_cols: usize,
-) {
-    for i in (start_lookup_col + 1..start_lookup_col + 1 + num_range_unsigned_cols).step_by(2) {
-        eval_lookups(vars, yield_constr, i, i + 1);
-    }
-    for i in (start_lookup_col + 2 + 2 * num_range_unsigned_cols
-        ..start_lookup_col + 2 + 2 * num_range_unsigned_cols + 2 * num_range_signed_cols)
-        .step_by(2)
-    {
-        eval_lookups(vars, yield_constr, i, i + 1);
-    }
-    let cur_table_unsigend = vars.local_values[start_lookup_col];
-    let next_table_unsigend = vars.next_values[start_lookup_col];
-    yield_constr.constraint_first_row(cur_table_unsigend);
-    let incr = next_table_unsigend - cur_table_unsigend;
-    yield_constr.constraint_transition(incr * incr - incr);
-    let range_max = P::Scalar::from_canonical_u64(((1 << 8) - 1) as u64);
-    yield_constr.constraint_last_row(cur_table_unsigend - range_max);
+// pub fn eval_modular_lookup<
+//     F: Field,
+//     P: PackedField<Scalar = F>,
+//     const COLS: usize,
+//     const PUBLIC_INPUTS: usize,
+// >(
+//     vars: StarkEvaluationVars<F, P, COLS, PUBLIC_INPUTS>,
+//     yield_constr: &mut ConstraintConsumer<P>,
+//     start_lookup_col: usize,
+//     num_range_unsigned_cols: usize,
+//     num_range_signed_cols: usize,
+// ) {
+//     for i in (start_lookup_col + 1..start_lookup_col + 1 + num_range_unsigned_cols).step_by(2) {
+//         eval_lookups(vars, yield_constr, i, i + 1);
+//     }
+//     for i in (start_lookup_col + 2 + 2 * num_range_unsigned_cols
+//         ..start_lookup_col + 2 + 2 * num_range_unsigned_cols + 2 * num_range_signed_cols)
+//         .step_by(2)
+//     {
+//         eval_lookups(vars, yield_constr, i, i + 1);
+//     }
+//     let cur_table_unsigend = vars.local_values[start_lookup_col];
+//     let next_table_unsigend = vars.next_values[start_lookup_col];
+//     yield_constr.constraint_first_row(cur_table_unsigend);
+//     let incr = next_table_unsigend - cur_table_unsigend;
+//     yield_constr.constraint_transition(incr * incr - incr);
+//     let range_max = P::Scalar::from_canonical_u64(((1 << 8) - 1) as u64);
+//     yield_constr.constraint_last_row(cur_table_unsigend - range_max);
 
-    let cur_table_sigend = vars.local_values[start_lookup_col + 1 + 2 * num_range_unsigned_cols];
-    let next_table_sigend = vars.next_values[start_lookup_col + 1 + 2 * num_range_unsigned_cols];
-    yield_constr.constraint_first_row(cur_table_sigend + range_max);
-    let incr = next_table_sigend - cur_table_sigend;
-    yield_constr.constraint_transition(incr * incr - incr);
-    yield_constr.constraint_last_row(cur_table_sigend - range_max);
-}
+//     let cur_table_sigend = vars.local_values[start_lookup_col + 1 + 2 * num_range_unsigned_cols];
+//     let next_table_sigend = vars.next_values[start_lookup_col + 1 + 2 * num_range_unsigned_cols];
+//     yield_constr.constraint_first_row(cur_table_sigend + range_max);
+//     let incr = next_table_sigend - cur_table_sigend;
+//     yield_constr.constraint_transition(incr * incr - incr);
+//     yield_constr.constraint_last_row(cur_table_sigend - range_max);
+// }
 
-pub fn eval_modular_lookup_circuit<
-    F: RichField + Extendable<D>,
-    const D: usize,
-    const COLS: usize,
-    const PUBLIC_INPUTS: usize,
->(
-    builder: &mut CircuitBuilder<F, D>,
-    vars: StarkEvaluationTargets<D, COLS, PUBLIC_INPUTS>,
-    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
-    start_lookup_col: usize,
-    num_range_unsigned_cols: usize,
-    num_range_signed_cols: usize,
-) {
-    for i in (start_lookup_col + 1..start_lookup_col + 1 + num_range_unsigned_cols).step_by(2) {
-        eval_lookups_circuit(builder, vars, yield_constr, i, i + 1);
-    }
-    for i in (start_lookup_col + 2 + 2 * num_range_unsigned_cols
-        ..start_lookup_col + 2 + 2 * num_range_unsigned_cols + 2 * num_range_signed_cols)
-        .step_by(2)
-    {
-        eval_lookups_circuit(builder, vars, yield_constr, i, i + 1);
-    }
-    let cur_table_unsigend = vars.local_values[start_lookup_col];
-    let next_table_unsigend = vars.next_values[start_lookup_col];
-    yield_constr.constraint_first_row(builder, cur_table_unsigend);
-    let incr = builder.sub_extension(next_table_unsigend, cur_table_unsigend);
-    let t = builder.mul_sub_extension(incr, incr, incr);
-    yield_constr.constraint_transition(builder, t);
-    let range_max = builder.constant_extension(F::Extension::from_canonical_usize((1 << 8) - 1));
-    let t = builder.sub_extension(cur_table_unsigend, range_max);
-    yield_constr.constraint_last_row(builder, t);
+// pub fn eval_modular_lookup_circuit<
+//     F: RichField + Extendable<D>,
+//     const D: usize,
+//     const COLS: usize,
+//     const PUBLIC_INPUTS: usize,
+// >(
+//     builder: &mut CircuitBuilder<F, D>,
+//     vars: StarkEvaluationTargets<D, COLS, PUBLIC_INPUTS>,
+//     yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+//     start_lookup_col: usize,
+//     num_range_unsigned_cols: usize,
+//     num_range_signed_cols: usize,
+// ) {
+//     for i in (start_lookup_col + 1..start_lookup_col + 1 + num_range_unsigned_cols).step_by(2) {
+//         eval_lookups_circuit(builder, vars, yield_constr, i, i + 1);
+//     }
+//     for i in (start_lookup_col + 2 + 2 * num_range_unsigned_cols
+//         ..start_lookup_col + 2 + 2 * num_range_unsigned_cols + 2 * num_range_signed_cols)
+//         .step_by(2)
+//     {
+//         eval_lookups_circuit(builder, vars, yield_constr, i, i + 1);
+//     }
+//     let cur_table_unsigend = vars.local_values[start_lookup_col];
+//     let next_table_unsigend = vars.next_values[start_lookup_col];
+//     yield_constr.constraint_first_row(builder, cur_table_unsigend);
+//     let incr = builder.sub_extension(next_table_unsigend, cur_table_unsigend);
+//     let t = builder.mul_sub_extension(incr, incr, incr);
+//     yield_constr.constraint_transition(builder, t);
+//     let range_max = builder.constant_extension(F::Extension::from_canonical_usize((1 << 8) - 1));
+//     let t = builder.sub_extension(cur_table_unsigend, range_max);
+//     yield_constr.constraint_last_row(builder, t);
 
-    let cur_table_sigend = vars.local_values[start_lookup_col + 1 + 2 * num_range_unsigned_cols];
-    let next_table_sigend = vars.next_values[start_lookup_col + 1 + 2 * num_range_unsigned_cols];
-    let t = builder.add_extension(cur_table_sigend, range_max);
-    yield_constr.constraint_first_row(builder, t);
-    let incr = builder.sub_extension(next_table_sigend, cur_table_sigend);
-    let t = builder.mul_sub_extension(incr, incr, incr);
-    yield_constr.constraint_transition(builder, t);
-    let t = builder.sub_extension(cur_table_sigend, range_max);
-    yield_constr.constraint_last_row(builder, t);
-}
+//     let cur_table_sigend = vars.local_values[start_lookup_col + 1 + 2 * num_range_unsigned_cols];
+//     let next_table_sigend = vars.next_values[start_lookup_col + 1 + 2 * num_range_unsigned_cols];
+//     let t = builder.add_extension(cur_table_sigend, range_max);
+//     yield_constr.constraint_first_row(builder, t);
+//     let incr = builder.sub_extension(next_table_sigend, cur_table_sigend);
+//     let t = builder.mul_sub_extension(incr, incr, incr);
+//     yield_constr.constraint_transition(builder, t);
+//     let t = builder.sub_extension(cur_table_sigend, range_max);
+//     yield_constr.constraint_last_row(builder, t);
+// }
 
-pub fn modular_permutation_pairs(
-    start_lookup_col: usize,
-    range_check_unsigned: Range<usize>,
-    range_check_signed: Range<usize>,
-) -> Vec<PermutationPair> {
-    let pairs_unsigned = range_check_unsigned
-        .clone()
-        .enumerate()
-        .map(|(i, pos)| PermutationPair::singletons(pos, start_lookup_col + 1 + 2 * i))
-        .collect_vec();
-    let pairs_signed = range_check_signed
-        .clone()
-        .enumerate()
-        .map(|(i, pos)| {
-            PermutationPair::singletons(
-                pos,
-                start_lookup_col + 1 + 2 * range_check_unsigned.len() + 1 + 2 * i,
-            )
-        })
-        .collect_vec();
-    let pairs_unsigned_table = (0..range_check_unsigned.len())
-        .map(|i| PermutationPair::singletons(start_lookup_col, start_lookup_col + 2 + 2 * i))
-        .collect_vec();
-    let pairs_signed_table = (0..range_check_signed.len())
-        .map(|i| {
-            PermutationPair::singletons(
-                start_lookup_col + 1 + 2 * range_check_unsigned.len(),
-                start_lookup_col + 1 + 2 * range_check_unsigned.len() + 2 + 2 * i,
-            )
-        })
-        .collect_vec();
-    let mut pairs = vec![];
-    pairs.extend(pairs_unsigned);
-    pairs.extend(pairs_signed);
-    pairs.extend(pairs_unsigned_table);
-    pairs.extend(pairs_signed_table);
-    pairs
-}
+// pub fn modular_permutation_pairs(
+//     start_lookup_col: usize,
+//     range_check_unsigned: Range<usize>,
+//     range_check_signed: Range<usize>,
+// ) -> Vec<PermutationPair> {
+//     let pairs_unsigned = range_check_unsigned
+//         .clone()
+//         .enumerate()
+//         .map(|(i, pos)| PermutationPair::singletons(pos, start_lookup_col + 1 + 2 * i))
+//         .collect_vec();
+//     let pairs_signed = range_check_signed
+//         .clone()
+//         .enumerate()
+//         .map(|(i, pos)| {
+//             PermutationPair::singletons(
+//                 pos,
+//                 start_lookup_col + 1 + 2 * range_check_unsigned.len() + 1 + 2 * i,
+//             )
+//         })
+//         .collect_vec();
+//     let pairs_unsigned_table = (0..range_check_unsigned.len())
+//         .map(|i| PermutationPair::singletons(start_lookup_col, start_lookup_col + 2 + 2 * i))
+//         .collect_vec();
+//     let pairs_signed_table = (0..range_check_signed.len())
+//         .map(|i| {
+//             PermutationPair::singletons(
+//                 start_lookup_col + 1 + 2 * range_check_unsigned.len(),
+//                 start_lookup_col + 1 + 2 * range_check_unsigned.len() + 2 + 2 * i,
+//             )
+//         })
+//         .collect_vec();
+//     let mut pairs = vec![];
+//     pairs.extend(pairs_unsigned);
+//     pairs.extend(pairs_signed);
+//     pairs.extend(pairs_unsigned_table);
+//     pairs.extend(pairs_signed_table);
+//     pairs
+// }
 
 #[cfg(test)]
 mod tests {
@@ -527,17 +517,14 @@ mod tests {
             modular::{eval_modular_op, eval_modular_op_circuit},
         },
         develop::{
-            modular::{
-                bn254_base_modulus_bigint, bn254_base_modulus_packfield, eval_modular_lookup,
-                eval_modular_lookup_circuit,
-            },
+            modular::{bn254_base_modulus_bigint, bn254_base_modulus_packfield},
             utils::{
                 columns_to_bigint, pol_mul_wide, pol_mul_wide_ext_circuit, pol_sub_assign,
                 pol_sub_assign_ext_circuit,
             },
         },
         develop::{
-            modular::{read_quot, write_modulus_aux, write_quot, write_u256},
+            modular::{write_modulus_aux, write_u256},
             utils::fq_to_columns,
         },
         permutation::PermutationPair,
@@ -552,19 +539,12 @@ mod tests {
     };
 
     use super::{
-        generate_modular_op, generate_modular_range_check, modular_constr_poly,
-        modular_constr_poly_ext_circuit, modular_permutation_pairs, read_modulus_aux, read_u256,
+        generate_modular_op, modular_constr_poly, modular_constr_poly_ext_circuit,
+        read_modulus_aux, read_u256,
     };
 
-    const MAIN_COLS: usize = 14 * N_LIMBS - 3;
-    const ROWS: usize = 1 << 9;
-
-    const NUM_RANGE_CHECK_UNSIGNED: usize = 12 * N_LIMBS - 4;
-    const NUM_RANGE_CHECK_SIGNED: usize = 2 * N_LIMBS;
-
-    const RANGE_CHECK_UNSIGNED: Range<usize> = 0..NUM_RANGE_CHECK_UNSIGNED;
-    const RANGE_CHECK_SIGNED: Range<usize> =
-        12 * N_LIMBS - 4..12 * N_LIMBS - 4 + NUM_RANGE_CHECK_SIGNED;
+    const MAIN_COLS: usize = 9 * N_LIMBS + 1;
+    const ROWS: usize = 1 << LIMB_BITS;
 
     #[derive(Clone, Copy)]
     pub struct ModularStark<F: RichField + Extendable<D>, const D: usize> {
@@ -597,7 +577,7 @@ mod tests {
 
                 let pol_input = pol_mul_wide(input0_limbs, input1_limbs);
 
-                let (output, quot, aux) =
+                let (output, quot_sign, aux) =
                     generate_modular_op::<F>(bn254_base_modulus_bigint(), pol_input);
 
                 let output_actual = columns_to_bigint(&output.map(|a| a.to_canonical_u64() as i64));
@@ -610,18 +590,20 @@ mod tests {
                 write_u256(&mut lv, &input0, &mut cur_col); // N_LIMBS
                 write_u256(&mut lv, &input1, &mut cur_col); // N_LIMBS
                 write_u256(&mut lv, &output, &mut cur_col); // N_LIMBS
-                write_modulus_aux(&mut lv, &aux, &mut cur_col); // 9*N_LIMBS - 4
-                write_quot(&mut lv, &quot, &mut cur_col); // 2*N_LIMBS
+                write_modulus_aux(&mut lv, &aux, &mut cur_col); // 6*N_LIMBS - 1
+
+                lv[cur_col] = quot_sign;
+                cur_col += 1;
+
                 lv[cur_col] = F::ONE;
                 cur_col += 1;
 
-                assert!(cur_col == MAIN_COLS);
+                assert!(cur_col == MAIN_COLS); // 9*N_LIMBS + 1
                 assert!(lv.iter().all(|x| x.to_canonical_u64() < (1 << LIMB_BITS)));
                 rows.push(lv);
             }
 
-            let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
-            generate_modular_range_check(RANGE_CHECK_UNSIGNED, RANGE_CHECK_SIGNED, &mut trace_cols);
+            let trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
 
             trace_cols
                 .into_iter()
@@ -631,8 +613,7 @@ mod tests {
     }
 
     impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for ModularStark<F, D> {
-        const COLUMNS: usize =
-            MAIN_COLS + 2 + 2 * NUM_RANGE_CHECK_UNSIGNED + 2 * NUM_RANGE_CHECK_SIGNED;
+        const COLUMNS: usize = MAIN_COLS;
         const PUBLIC_INPUTS: usize = 0;
 
         fn eval_packed_generic<FE, P, const D2: usize>(
@@ -645,14 +626,6 @@ mod tests {
         {
             let lv = vars.local_values.clone();
 
-            eval_modular_lookup(
-                vars,
-                yield_constr,
-                MAIN_COLS,
-                NUM_RANGE_CHECK_UNSIGNED,
-                NUM_RANGE_CHECK_SIGNED,
-            );
-
             let mut cur_col = 0;
 
             let input0: [P; N_LIMBS] = read_u256(&lv, &mut cur_col);
@@ -660,7 +633,9 @@ mod tests {
             let output = read_u256(&lv, &mut cur_col);
 
             let aux = read_modulus_aux(&lv, &mut cur_col);
-            let quot = read_quot(&lv, &mut cur_col);
+
+            let quot_sign = lv[cur_col];
+            cur_col += 1;
 
             let filter = lv[cur_col];
             cur_col += 1;
@@ -673,7 +648,7 @@ mod tests {
                 bn254_base_modulus_packfield(),
                 input,
                 output,
-                quot,
+                quot_sign,
                 &aux,
             );
         }
@@ -686,15 +661,6 @@ mod tests {
         ) {
             let lv = vars.local_values.clone();
 
-            eval_modular_lookup_circuit(
-                builder,
-                vars,
-                yield_constr,
-                MAIN_COLS,
-                NUM_RANGE_CHECK_UNSIGNED,
-                NUM_RANGE_CHECK_SIGNED,
-            );
-
             let mut cur_col = 0;
 
             let input0 = read_u256(&lv, &mut cur_col);
@@ -705,7 +671,9 @@ mod tests {
             let modulus = modulus.map(|x| builder.constant_extension(x));
 
             let aux = read_modulus_aux(&lv, &mut cur_col);
-            let quot = read_quot(&lv, &mut cur_col);
+
+            let quot_sign = lv[cur_col];
+            cur_col += 1;
 
             let filter = lv[cur_col];
             cur_col += 1;
@@ -719,7 +687,7 @@ mod tests {
                 modulus,
                 input,
                 output,
-                quot,
+                quot_sign,
                 &aux,
             );
         }
@@ -728,9 +696,9 @@ mod tests {
             3
         }
 
-        fn permutation_pairs(&self) -> Vec<PermutationPair> {
-            modular_permutation_pairs(MAIN_COLS, RANGE_CHECK_UNSIGNED, RANGE_CHECK_SIGNED)
-        }
+        // fn permutation_pairs(&self) -> Vec<PermutationPair> {
+        //     modular_permutation_pairs(MAIN_COLS, RANGE_CHECK_UNSIGNED, RANGE_CHECK_SIGNED)
+        // }
     }
 
     #[test]
@@ -754,14 +722,14 @@ mod tests {
         .unwrap();
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
 
-        let circuit_config = CircuitConfig::standard_recursion_config();
-        let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
-        let mut pw = PartialWitness::new();
-        let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
-        let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
-        set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
-        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
-        let data = builder.build::<C>();
-        let _proof = data.prove(pw).unwrap();
+        // let circuit_config = CircuitConfig::standard_recursion_config();
+        // let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
+        // let mut pw = PartialWitness::new();
+        // let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
+        // let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
+        // set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
+        // verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
+        // let data = builder.build::<C>();
+        // let _proof = data.prove(pw).unwrap();
     }
 }

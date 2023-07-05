@@ -13,7 +13,7 @@ use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::util::transpose;
 
-use crate::develop::constants::N_LIMBS;
+use crate::develop::constants::{LIMB_BITS, N_LIMBS};
 use crate::native::MyFq12;
 
 pub fn biguint_to_bits(x: &BigUint, len: usize) -> Vec<bool> {
@@ -30,17 +30,13 @@ pub fn biguint_to_bits(x: &BigUint, len: usize) -> Vec<bool> {
 }
 
 pub fn columns_to_bigint<const N: usize>(limbs: &[i64; N]) -> BigInt {
-    const BASE: i64 = 1i64 << 8;
+    const BASE: i64 = 1i64 << LIMB_BITS;
 
     let mut pos_limbs_u32 = Vec::with_capacity(N / 2 + 1);
     let mut neg_limbs_u32 = Vec::with_capacity(N / 2 + 1);
     let mut cy = 0i64; // cy is necessary to handle ε > 0
-    for i in 0..(N / 4) {
-        let t = cy
-            + limbs[4 * i]
-            + BASE * limbs[4 * i + 1]
-            + BASE * BASE * limbs[4 * i + 2]
-            + BASE * BASE * BASE * limbs[4 * i + 3];
+    for i in 0..(N / 2) {
+        let t = cy + limbs[2 * i] + BASE * limbs[2 * i + 1];
         pos_limbs_u32.push(if t > 0 { t as u32 } else { 0u32 });
         neg_limbs_u32.push(if t < 0 { -t as u32 } else { 0u32 });
         cy = t / (1i64 << 32); //　繰り上がり
@@ -64,10 +60,8 @@ pub fn bigint_to_columns<const N: usize>(num: &BigInt) -> [i64; N] {
     assert!(num.bits() <= 16 * N as u64);
     let mut output = [0i64; N];
     for (i, limb) in num.iter_u32_digits().enumerate() {
-        output[4 * i] = limb as u8 as i64;
-        output[4 * i + 1] = (limb >> 8) as u8 as i64;
-        output[4 * i + 2] = (limb >> 16) as u8 as i64;
-        output[4 * i + 3] = (limb >> 24) as u8 as i64;
+        output[2 * i] = limb as u16 as i64;
+        output[2 * i + 1] = (limb >> LIMB_BITS) as u16 as i64;
     }
     if num.sign() == Sign::Minus {
         for c in output.iter_mut() {
@@ -336,13 +330,11 @@ pub fn pol_mul_wide_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
     res
 }
 
-/// As for `pol_mul_wide` but the first argument has 2N elements and
-/// hence the result has 3N-1.
-pub fn pol_mul_wide2<T>(a: [T; 2 * N_LIMBS], b: [T; N_LIMBS]) -> [T; 3 * N_LIMBS - 1]
+pub fn pol_mul_wide2<T>(a: [T; N_LIMBS + 1], b: [T; N_LIMBS]) -> [T; 2 * N_LIMBS]
 where
     T: AddAssign + Copy + Mul<Output = T> + Default,
 {
-    let mut res = [T::default(); 3 * N_LIMBS - 1];
+    let mut res = [T::default(); 2 * N_LIMBS];
     for (i, &ai) in a.iter().enumerate() {
         for (j, &bj) in b.iter().enumerate() {
             res[i + j] += ai * bj;
@@ -353,11 +345,11 @@ where
 
 pub fn pol_mul_wide2_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
-    a: [ExtensionTarget<D>; 2 * N_LIMBS],
+    a: [ExtensionTarget<D>; N_LIMBS + 1],
     b: [ExtensionTarget<D>; N_LIMBS],
-) -> [ExtensionTarget<D>; 3 * N_LIMBS - 1] {
+) -> [ExtensionTarget<D>; 2 * N_LIMBS] {
     let zero = builder.zero_extension();
-    let mut res = [zero; 3 * N_LIMBS - 1];
+    let mut res = [zero; 2 * N_LIMBS];
     for (i, &ai) in a.iter().enumerate() {
         for (j, &bj) in b.iter().enumerate() {
             res[i + j] = builder.mul_add_extension(ai, bj, res[i + j]);
@@ -484,20 +476,4 @@ where
 /// length `N`. Panics if the length of the range is not `N`.
 pub fn read_value<const N: usize, T: Copy>(lv: &[T], value_idxs: Range<usize>) -> [T; N] {
     lv[value_idxs].try_into().unwrap()
-}
-
-/// Read the range `value_idxs` of values from `lv` into an array of
-/// length `N`, interpreting the values as `i64`s. Panics if the
-/// length of the range is not `N`.
-pub fn read_value_i64_limbs<const N: usize, F: PrimeField64>(
-    lv: &[F],
-    value_idxs: Range<usize>,
-) -> [i64; N] {
-    let limbs: [_; N] = lv[value_idxs].try_into().unwrap();
-    limbs.map(|c| c.to_canonical_u64() as i64)
-}
-
-pub fn to_i64_limbs<const N: usize, F: PrimeField64>(limbs: &[F]) -> [i64; N] {
-    let limbs: [_; N] = limbs.try_into().unwrap();
-    limbs.map(|c| c.to_canonical_u64() as i64)
 }
