@@ -324,125 +324,130 @@ pub fn bn254_base_modulus_packfield<P: PackedField>() -> [P; N_LIMBS] {
     modulus_column
 }
 
-// pub fn generate_modular_range_check<F: PrimeField64>(
-//     range_check_unsigned: Range<usize>,
-//     range_check_signed: Range<usize>,
-//     trace_cols: &mut Vec<Vec<F>>,
-// ) {
-//     assert!(trace_cols.iter().all(|col| col.len() == 1 << 9));
+/// 1 + 6*target_cols.len()
+pub fn generate_u16_range_check<F: RichField>(
+    target_cols: Range<usize>,
+    trace_cols: &mut Vec<Vec<F>>,
+) {
+    let range_max: u64 = 1 << 8;
+    let num_rows = trace_cols[0].len() as u64;
+    assert!(trace_cols.iter().all(|col| col.len() == num_rows as usize));
+    assert!(num_rows.is_power_of_two() && range_max <= num_rows);
 
-//     let mut table_unsigned = vec![]; //0, ..., 255, ... , 255
-//     let mut table_signed = vec![]; //-255, ..., 0, ..., 255
+    let mut table = vec![];
 
-//     let range_max: u64 = (1 << 8) - 1;
-//     for i in 0..1 << 8 {
-//         table_unsigned.push(F::from_canonical_u64(i));
-//         table_signed.push(-F::from_canonical_u64(range_max - i));
-//     }
-//     for i in 1 << 8..1 << 9 {
-//         table_unsigned.push(F::from_canonical_u64(range_max));
-//         table_signed.push(F::from_canonical_u64(i - range_max));
-//     }
-//     table_signed[(1 << 9) - 1] = F::from_canonical_u64(range_max);
+    for i in 0..range_max {
+        table.push(F::from_canonical_u64(i));
+    }
+    for _ in range_max..num_rows {
+        table.push(F::from_canonical_u64(range_max - 1));
+    }
 
-//     trace_cols.push(table_unsigned.clone());
+    trace_cols.push(table.clone());
 
-//     for i in range_check_unsigned {
-//         let c = trace_cols[i].clone();
-//         let (col_perm, table_perm) = permuted_cols(&c, &table_unsigned);
-//         trace_cols.push(col_perm);
-//         trace_cols.push(table_perm);
-//     }
+    for i in target_cols {
+        let col = trace_cols[i].clone();
+        assert!(col.iter().all(|&x| x.to_canonical_u64() < (1 << 16)));
 
-//     trace_cols.push(table_signed.clone());
+        // split to lo and hi
+        let col_lo = col
+            .iter()
+            .map(|&x| F::from_canonical_u8(x.to_canonical_u64() as u8))
+            .collect_vec();
+        let col_hi = col
+            .iter()
+            .map(|&x| F::from_canonical_u8((x.to_canonical_u64() >> 8) as u8))
+            .collect_vec();
 
-//     for i in range_check_signed {
-//         let c = trace_cols[i].clone();
-//         let (col_perm, table_perm) = permuted_cols(&c, &table_signed);
-//         trace_cols.push(col_perm);
-//         trace_cols.push(table_perm);
-//     }
-// }
+        let (col_perm_lo, table_perm_lo) = permuted_cols(&col_lo, &table);
+        let (col_perm_hi, table_perm_hi) = permuted_cols(&col_hi, &table);
 
-// pub fn eval_modular_lookup<
-//     F: Field,
-//     P: PackedField<Scalar = F>,
-//     const COLS: usize,
-//     const PUBLIC_INPUTS: usize,
-// >(
-//     vars: StarkEvaluationVars<F, P, COLS, PUBLIC_INPUTS>,
-//     yield_constr: &mut ConstraintConsumer<P>,
-//     start_lookup_col: usize,
-//     num_range_unsigned_cols: usize,
-//     num_range_signed_cols: usize,
-// ) {
-//     for i in (start_lookup_col + 1..start_lookup_col + 1 + num_range_unsigned_cols).step_by(2) {
-//         eval_lookups(vars, yield_constr, i, i + 1);
-//     }
-//     for i in (start_lookup_col + 2 + 2 * num_range_unsigned_cols
-//         ..start_lookup_col + 2 + 2 * num_range_unsigned_cols + 2 * num_range_signed_cols)
-//         .step_by(2)
-//     {
-//         eval_lookups(vars, yield_constr, i, i + 1);
-//     }
-//     let cur_table_unsigend = vars.local_values[start_lookup_col];
-//     let next_table_unsigend = vars.next_values[start_lookup_col];
-//     yield_constr.constraint_first_row(cur_table_unsigend);
-//     let incr = next_table_unsigend - cur_table_unsigend;
-//     yield_constr.constraint_transition(incr * incr - incr);
-//     let range_max = P::Scalar::from_canonical_u64(((1 << 8) - 1) as u64);
-//     yield_constr.constraint_last_row(cur_table_unsigend - range_max);
+        trace_cols.push(col_lo);
+        trace_cols.push(col_perm_lo);
+        trace_cols.push(table_perm_lo);
+        trace_cols.push(col_hi);
+        trace_cols.push(col_perm_hi);
+        trace_cols.push(table_perm_hi);
+    }
+}
 
-//     let cur_table_sigend = vars.local_values[start_lookup_col + 1 + 2 * num_range_unsigned_cols];
-//     let next_table_sigend = vars.next_values[start_lookup_col + 1 + 2 * num_range_unsigned_cols];
-//     yield_constr.constraint_first_row(cur_table_sigend + range_max);
-//     let incr = next_table_sigend - cur_table_sigend;
-//     yield_constr.constraint_transition(incr * incr - incr);
-//     yield_constr.constraint_last_row(cur_table_sigend - range_max);
-// }
+pub fn eval_u16_range_check<
+    F: Field,
+    P: PackedField<Scalar = F>,
+    const COLS: usize,
+    const PUBLIC_INPUTS: usize,
+>(
+    vars: StarkEvaluationVars<F, P, COLS, PUBLIC_INPUTS>,
+    yield_constr: &mut ConstraintConsumer<P>,
+    main_col: usize,
+    target_cols: Range<usize>,
+) {
+    // split
+    for (i, col) in target_cols.clone().enumerate() {
+        let original = vars.local_values[col];
+        let lo = vars.local_values[main_col + 1 + 6 * i];
+        let hi = vars.local_values[main_col + 4 + 6 * i];
 
-// pub fn eval_modular_lookup_circuit<
-//     F: RichField + Extendable<D>,
-//     const D: usize,
-//     const COLS: usize,
-//     const PUBLIC_INPUTS: usize,
-// >(
-//     builder: &mut CircuitBuilder<F, D>,
-//     vars: StarkEvaluationTargets<D, COLS, PUBLIC_INPUTS>,
-//     yield_constr: &mut RecursiveConstraintConsumer<F, D>,
-//     start_lookup_col: usize,
-//     num_range_unsigned_cols: usize,
-//     num_range_signed_cols: usize,
-// ) {
-//     for i in (start_lookup_col + 1..start_lookup_col + 1 + num_range_unsigned_cols).step_by(2) {
-//         eval_lookups_circuit(builder, vars, yield_constr, i, i + 1);
-//     }
-//     for i in (start_lookup_col + 2 + 2 * num_range_unsigned_cols
-//         ..start_lookup_col + 2 + 2 * num_range_unsigned_cols + 2 * num_range_signed_cols)
-//         .step_by(2)
-//     {
-//         eval_lookups_circuit(builder, vars, yield_constr, i, i + 1);
-//     }
-//     let cur_table_unsigend = vars.local_values[start_lookup_col];
-//     let next_table_unsigend = vars.next_values[start_lookup_col];
-//     yield_constr.constraint_first_row(builder, cur_table_unsigend);
-//     let incr = builder.sub_extension(next_table_unsigend, cur_table_unsigend);
-//     let t = builder.mul_sub_extension(incr, incr, incr);
-//     yield_constr.constraint_transition(builder, t);
-//     let range_max = builder.constant_extension(F::Extension::from_canonical_usize((1 << 8) - 1));
-//     let t = builder.sub_extension(cur_table_unsigend, range_max);
-//     yield_constr.constraint_last_row(builder, t);
+        let recoverd = lo + hi * P::Scalar::from_canonical_u64(1 << 8);
+        yield_constr.constraint(original - recoverd);
+    }
 
-//     let cur_table_sigend = vars.local_values[start_lookup_col + 1 + 2 * num_range_unsigned_cols];
-//     let next_table_sigend = vars.next_values[start_lookup_col + 1 + 2 * num_range_unsigned_cols];
-//     let t = builder.add_extension(cur_table_sigend, range_max);
-//     yield_constr.constraint_first_row(builder, t);
-//     let incr = builder.sub_extension(next_table_sigend, cur_table_sigend);
-//     let t = builder.mul_sub_extension(incr, incr, incr);
-//     yield_constr.constraint_transition(builder, t);
-//     let t = builder.sub_extension(cur_table_sigend, range_max);
-//     yield_constr.constraint_last_row(builder, t);
-// }
+    // lookup
+    for i in (main_col + 1..main_col + 1 + 6 * target_cols.len()).step_by(6) {
+        eval_lookups(vars, yield_constr, i + 1, i + 2); //col_perm_lo and table_perm_lo
+        eval_lookups(vars, yield_constr, i + 4, i + 5); //col_perm_hi and table_perm_hi
+    }
+
+    // table format
+    let cur_table = vars.local_values[main_col];
+    let next_table = vars.next_values[main_col];
+    yield_constr.constraint_first_row(cur_table);
+    let incr = next_table - cur_table;
+    yield_constr.constraint_transition(incr * incr - incr);
+    let range_max = P::Scalar::from_canonical_u64(((1 << 8) - 1) as u64);
+    yield_constr.constraint_last_row(cur_table - range_max);
+}
+
+pub fn eval_u16_range_check_circuit<
+    F: RichField + Extendable<D>,
+    const D: usize,
+    const COLS: usize,
+    const PUBLIC_INPUTS: usize,
+>(
+    builder: &mut CircuitBuilder<F, D>,
+    vars: StarkEvaluationTargets<D, COLS, PUBLIC_INPUTS>,
+    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+    main_col: usize,
+    target_cols: Range<usize>,
+) {
+    let base = builder.constant_extension(F::Extension::from_canonical_u64(1u64 << 8));
+    for (i, col) in target_cols.clone().enumerate() {
+        let original = vars.local_values[col];
+        let lo = vars.local_values[main_col + 1 + 6 * i];
+        let hi = vars.local_values[main_col + 4 + 6 * i];
+        let recovered = builder.mul_add_extension(base, hi, lo);
+        let diff = builder.sub_extension(original, recovered);
+        yield_constr.constraint(builder, diff);
+    }
+
+    // lookup
+    for i in (main_col + 1..main_col + 1 + 6 * target_cols.len()).step_by(6) {
+        eval_lookups_circuit(builder, vars, yield_constr, i + 1, i + 2); //col_perm_lo and table_perm_lo
+        eval_lookups_circuit(builder, vars, yield_constr, i + 4, i + 5); //col_perm_hi and table_perm_hi
+    }
+
+    // table format
+    let cur_table = vars.local_values[main_col];
+    let next_table = vars.next_values[main_col];
+    yield_constr.constraint_first_row(builder, cur_table);
+    let incr = builder.sub_extension(next_table, cur_table);
+    let t = builder.mul_sub_extension(incr, incr, incr);
+    yield_constr.constraint_transition(builder, t);
+
+    let range_max = builder.constant_extension(F::Extension::from_canonical_usize((1 << 8) - 1));
+    let t = builder.sub_extension(cur_table, range_max);
+    yield_constr.constraint_last_row(builder, t);
+}
 
 // pub fn modular_permutation_pairs(
 //     start_lookup_col: usize,
@@ -512,7 +517,10 @@ mod tests {
         constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
         develop::{
             constants::{LIMB_BITS, N_LIMBS},
-            modular::{eval_modular_op, eval_modular_op_circuit},
+            modular::{
+                eval_modular_op, eval_modular_op_circuit, eval_u16_range_check,
+                eval_u16_range_check_circuit,
+            },
         },
         develop::{
             modular::{bn254_base_modulus_bigint, bn254_base_modulus_packfield},
@@ -537,12 +545,16 @@ mod tests {
     };
 
     use super::{
-        generate_modular_op, modular_constr_poly, modular_constr_poly_ext_circuit,
-        read_modulus_aux, read_u256,
+        generate_modular_op, generate_u16_range_check, modular_constr_poly,
+        modular_constr_poly_ext_circuit, read_modulus_aux, read_u256,
     };
 
     const MAIN_COLS: usize = 9 * N_LIMBS + 1;
-    const ROWS: usize = 1 << LIMB_BITS;
+    const ROWS: usize = 512;
+
+    const START_RANGE_CHECK: usize = 2 * N_LIMBS;
+    const NUM_RANGE_CHECK: usize = 7 * N_LIMBS - 1;
+    const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECK;
 
     #[derive(Clone, Copy)]
     pub struct ModularStark<F: RichField + Extendable<D>, const D: usize> {
@@ -601,7 +613,9 @@ mod tests {
                 rows.push(lv);
             }
 
-            let trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
+            let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
+
+            generate_u16_range_check(START_RANGE_CHECK..END_RANGE_CHECK, &mut trace_cols);
 
             trace_cols
                 .into_iter()
@@ -611,7 +625,7 @@ mod tests {
     }
 
     impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for ModularStark<F, D> {
-        const COLUMNS: usize = MAIN_COLS;
+        const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECK;
         const PUBLIC_INPUTS: usize = 0;
 
         fn eval_packed_generic<FE, P, const D2: usize>(
@@ -623,6 +637,13 @@ mod tests {
             P: PackedField<Scalar = FE>,
         {
             let lv = vars.local_values.clone();
+
+            eval_u16_range_check(
+                vars,
+                yield_constr,
+                MAIN_COLS,
+                START_RANGE_CHECK..END_RANGE_CHECK,
+            );
 
             let mut cur_col = 0;
 
@@ -658,6 +679,14 @@ mod tests {
             yield_constr: &mut RecursiveConstraintConsumer<F, D>,
         ) {
             let lv = vars.local_values.clone();
+
+            eval_u16_range_check_circuit(
+                builder,
+                vars,
+                yield_constr,
+                MAIN_COLS,
+                START_RANGE_CHECK..END_RANGE_CHECK,
+            );
 
             let mut cur_col = 0;
 
