@@ -15,7 +15,7 @@ use crate::{
         modular::write_u256,
         utils::{
             pol_add_assign, pol_add_assign_ext_circuit, pol_add_wide, pol_add_wide_ext_circuit,
-            pol_mul_const, pol_mul_const_ext_circuit, pol_mul_wide, pol_mul_wide_ext_circuit,
+            pol_mul_const_ext_circuit, pol_mul_scalar, pol_mul_wide, pol_mul_wide_ext_circuit,
             pol_sub_assign, pol_sub_assign_ext_circuit, pol_sub_wide, pol_sub_wide_ext_circuit,
         },
     },
@@ -67,7 +67,7 @@ where
     let mut out_coeffs: Vec<[T; 2 * N_LIMBS - 1]> = Vec::with_capacity(12);
     for i in 0..6 {
         if i < 5 {
-            let nine_times_a0b0_minus_a1b1 = pol_mul_const(a0b0_minus_a1b1[i + 6], xi);
+            let nine_times_a0b0_minus_a1b1 = pol_mul_scalar(a0b0_minus_a1b1[i + 6], xi);
             let mut coeff = pol_add_wide(a0b0_minus_a1b1[i], nine_times_a0b0_minus_a1b1);
             pol_sub_assign(&mut coeff, &a0b1_plus_a1b0[i + 6]);
             out_coeffs.push(coeff);
@@ -78,7 +78,7 @@ where
     for i in 0..6 {
         if i < 5 {
             let mut coeff = pol_add_wide(a0b1_plus_a1b0[i], a0b0_minus_a1b1[i + 6]);
-            let nine_times_a0b1_plus_a1b0 = pol_mul_const(a0b1_plus_a1b0[i + 6], xi);
+            let nine_times_a0b1_plus_a1b0 = pol_mul_scalar(a0b1_plus_a1b0[i + 6], xi);
             pol_add_assign(&mut coeff, &nine_times_a0b1_plus_a1b0);
             out_coeffs.push(coeff);
         } else {
@@ -229,8 +229,8 @@ mod tests {
                 write_modulus_aux,
             },
             range_check::{
-                eval_u16_range_check, eval_u16_range_check_circuit, generate_u16_range_check,
-                u16_range_check_pairs,
+                eval_split_u16_range_check, eval_split_u16_range_check_circuit,
+                generate_split_u16_range_check, split_u16_range_check_pairs,
             },
         },
         develop::{
@@ -336,7 +336,7 @@ mod tests {
 
             let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
 
-            generate_u16_range_check(START_RANGE_CHECK..END_RANGE_CHECK, &mut trace_cols);
+            generate_split_u16_range_check(START_RANGE_CHECK..END_RANGE_CHECK, &mut trace_cols);
 
             trace_cols
                 .into_iter()
@@ -359,7 +359,7 @@ mod tests {
         {
             let lv = vars.local_values.clone();
 
-            eval_u16_range_check(
+            eval_split_u16_range_check(
                 vars,
                 yield_constr,
                 MAIN_COLS,
@@ -413,7 +413,7 @@ mod tests {
         ) {
             let lv = vars.local_values.clone();
 
-            eval_u16_range_check_circuit(
+            eval_split_u16_range_check_circuit(
                 builder,
                 vars,
                 yield_constr,
@@ -468,7 +468,7 @@ mod tests {
         }
 
         fn permutation_pairs(&self) -> Vec<PermutationPair> {
-            u16_range_check_pairs(MAIN_COLS, START_RANGE_CHECK..END_RANGE_CHECK)
+            split_u16_range_check_pairs(MAIN_COLS, START_RANGE_CHECK..END_RANGE_CHECK)
         }
     }
 

@@ -293,12 +293,12 @@ where
     res
 }
 
-pub fn pol_mul_const<T>(a: [T; 2 * N_LIMBS - 1], c: T) -> [T; 2 * N_LIMBS - 1]
+pub fn pol_mul_scalar<T, const N: usize>(a: [T; N], c: T) -> [T; N]
 where
     T: Mul<Output = T> + Copy + Default,
 {
     let mut muled = pol_zero();
-    for i in 0..2 * N_LIMBS - 1 {
+    for i in 0..N {
         muled[i] = c * a[i];
     }
     muled

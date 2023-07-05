@@ -29,7 +29,7 @@ use super::utils::pol_sub_assign_ext_circuit;
 
 use crate::develop::constants::{LIMB_BITS, N_LIMBS};
 
-pub const AUX_COEFF_ABS_MAX: i64 = 1 << 25;
+pub const AUX_COEFF_ABS_MAX: i64 = 1 << 29;
 
 pub struct ModulusAux<F> {
     pub out_aux_red: [F; N_LIMBS],
@@ -352,8 +352,8 @@ mod tests {
             constants::{LIMB_BITS, N_LIMBS},
             modular::{eval_modular_op, eval_modular_op_circuit},
             range_check::{
-                eval_u16_range_check, eval_u16_range_check_circuit, generate_u16_range_check,
-                u16_range_check_pairs,
+                eval_split_u16_range_check, eval_split_u16_range_check_circuit,
+                generate_split_u16_range_check, split_u16_range_check_pairs,
             },
         },
         develop::{
@@ -443,7 +443,7 @@ mod tests {
 
             let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
 
-            generate_u16_range_check(START_RANGE_CHECK..END_RANGE_CHECK, &mut trace_cols);
+            generate_split_u16_range_check(START_RANGE_CHECK..END_RANGE_CHECK, &mut trace_cols);
 
             trace_cols
                 .into_iter()
@@ -466,7 +466,7 @@ mod tests {
         {
             let lv = vars.local_values.clone();
 
-            eval_u16_range_check(
+            eval_split_u16_range_check(
                 vars,
                 yield_constr,
                 MAIN_COLS,
@@ -508,7 +508,7 @@ mod tests {
         ) {
             let lv = vars.local_values.clone();
 
-            eval_u16_range_check_circuit(
+            eval_split_u16_range_check_circuit(
                 builder,
                 vars,
                 yield_constr,
@@ -551,7 +551,7 @@ mod tests {
         }
 
         fn permutation_pairs(&self) -> Vec<PermutationPair> {
-            u16_range_check_pairs(MAIN_COLS, START_RANGE_CHECK..END_RANGE_CHECK)
+            split_u16_range_check_pairs(MAIN_COLS, START_RANGE_CHECK..END_RANGE_CHECK)
         }
     }
 

@@ -9,13 +9,114 @@ use plonky2::{
 
 use crate::{
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
+    develop::constants::LIMB_BITS,
     lookup::{eval_lookups, eval_lookups_circuit, permuted_cols},
     permutation::PermutationPair,
     vars::{StarkEvaluationTargets, StarkEvaluationVars},
 };
 
-/// 1 + 6*target_cols.len()
+/// 1 + 2*target_cols.len()
 pub fn generate_u16_range_check<F: RichField>(
+    target_cols: Range<usize>,
+    trace_cols: &mut Vec<Vec<F>>,
+) {
+    let range_max: u64 = 1 << LIMB_BITS;
+
+    assert!(trace_cols.iter().all(|col| col.len() == range_max as usize));
+
+    let mut table = vec![];
+
+    for i in 0..range_max {
+        table.push(F::from_canonical_u64(i));
+    }
+
+    trace_cols.push(table.clone());
+
+    for i in target_cols {
+        let col = trace_cols[i].clone();
+        assert!(col.iter().all(|&x| x.to_canonical_u64() < range_max));
+
+        let (col_perm, table_perm) = permuted_cols(&col, &table);
+        trace_cols.push(col_perm);
+        trace_cols.push(table_perm);
+    }
+}
+
+pub fn eval_u16_range_check<
+    F: Field,
+    P: PackedField<Scalar = F>,
+    const COLS: usize,
+    const PUBLIC_INPUTS: usize,
+>(
+    vars: StarkEvaluationVars<F, P, COLS, PUBLIC_INPUTS>,
+    yield_constr: &mut ConstraintConsumer<P>,
+    main_col: usize,
+    target_cols: Range<usize>,
+) {
+    // lookup
+    for i in (main_col + 1..main_col + 1 + 2 * target_cols.len()).step_by(2) {
+        eval_lookups(vars, yield_constr, i, i + 1); //col_perm_lo and table_perm_lo
+    }
+
+    // table format
+    let cur_table = vars.local_values[main_col];
+    let next_table = vars.next_values[main_col];
+    yield_constr.constraint_first_row(cur_table);
+    let incr = next_table - cur_table;
+    yield_constr.constraint_transition(incr * incr - incr);
+    let range_max = P::Scalar::from_canonical_u64(((1 << LIMB_BITS) - 1) as u64);
+    yield_constr.constraint_last_row(cur_table - range_max);
+}
+
+pub fn eval_u16_range_check_circuit<
+    F: RichField + Extendable<D>,
+    const D: usize,
+    const COLS: usize,
+    const PUBLIC_INPUTS: usize,
+>(
+    builder: &mut CircuitBuilder<F, D>,
+    vars: StarkEvaluationTargets<D, COLS, PUBLIC_INPUTS>,
+    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+    main_col: usize,
+    target_cols: Range<usize>,
+) {
+    // lookup
+    for i in (main_col + 1..main_col + 1 + 2 * target_cols.len()).step_by(2) {
+        eval_lookups_circuit(builder, vars, yield_constr, i, i + 1);
+    }
+
+    // table format
+    let cur_table = vars.local_values[main_col];
+    let next_table = vars.next_values[main_col];
+    yield_constr.constraint_first_row(builder, cur_table);
+    let incr = builder.sub_extension(next_table, cur_table);
+    let t = builder.mul_sub_extension(incr, incr, incr);
+    yield_constr.constraint_transition(builder, t);
+
+    let range_max =
+        builder.constant_extension(F::Extension::from_canonical_usize((1 << LIMB_BITS) - 1));
+    let t = builder.sub_extension(cur_table, range_max);
+    yield_constr.constraint_last_row(builder, t);
+}
+
+pub fn u16_range_check_pairs(main_col: usize, target_cols: Range<usize>) -> Vec<PermutationPair> {
+    let mut pairs = vec![];
+
+    for (i, pos) in target_cols.enumerate() {
+        // table
+        pairs.push(PermutationPair::singletons(
+            main_col,
+            main_col + 1 + 2 * i + 1,
+        ));
+
+        // cols
+        pairs.push(PermutationPair::singletons(pos, main_col + 1 + 2 * i));
+    }
+    pairs
+}
+
+/// 1 + 6*target_cols.len()
+pub fn generate_split_u16_range_check<F: RichField>(
     target_cols: Range<usize>,
     trace_cols: &mut Vec<Vec<F>>,
 ) {
@@ -61,7 +162,7 @@ pub fn generate_u16_range_check<F: RichField>(
     }
 }
 
-pub fn eval_u16_range_check<
+pub fn eval_split_u16_range_check<
     F: Field,
     P: PackedField<Scalar = F>,
     const COLS: usize,
@@ -98,7 +199,7 @@ pub fn eval_u16_range_check<
     yield_constr.constraint_last_row(cur_table - range_max);
 }
 
-pub fn eval_u16_range_check_circuit<
+pub fn eval_split_u16_range_check_circuit<
     F: RichField + Extendable<D>,
     const D: usize,
     const COLS: usize,
@@ -139,7 +240,10 @@ pub fn eval_u16_range_check_circuit<
     yield_constr.constraint_last_row(builder, t);
 }
 
-pub fn u16_range_check_pairs(main_col: usize, target_cols: Range<usize>) -> Vec<PermutationPair> {
+pub fn split_u16_range_check_pairs(
+    main_col: usize,
+    target_cols: Range<usize>,
+) -> Vec<PermutationPair> {
     let mut pairs = vec![];
 
     for i in (main_col + 1..main_col + 1 + 6 * target_cols.len()).step_by(6) {
