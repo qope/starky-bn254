@@ -10,7 +10,6 @@ extern crate alloc;
 mod get_challenges;
 
 pub mod config;
-pub mod constants;
 pub mod constraint_consumer;
 pub mod develop;
 pub mod lookup;
@@ -21,7 +20,7 @@ pub mod prover;
 pub mod recursive_verifier;
 pub mod stark;
 pub mod stark_testing;
-pub mod util;
+
 pub mod vanishing_poly;
 pub mod vars;
 pub mod verifier;

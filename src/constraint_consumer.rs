@@ -81,7 +81,7 @@ pub struct RecursiveConstraintConsumer<F: RichField + Extendable<D>, const D: us
     alphas: Vec<Target>,
 
     /// A running sum of constraints that have been emitted so far, scaled by powers of alpha.
-    constraint_accs: Vec<ExtensionTarget<D>>,
+    pub constraint_accs: Vec<ExtensionTarget<D>>,
 
     /// The evaluation of `X - g^(n-1)`.
     z_last: ExtensionTarget<D>,

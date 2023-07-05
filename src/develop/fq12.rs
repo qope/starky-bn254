@@ -1,18 +1,27 @@
+use core::fmt::Debug;
 use core::ops::*;
-
+use itertools::Itertools;
+use num_bigint::BigInt;
 use plonky2::{
-    field::extension::Extendable, hash::hash_types::RichField, iop::ext_target::ExtensionTarget,
+    field::{extension::Extendable, types::PrimeField64},
+    hash::hash_types::RichField,
+    iop::ext_target::ExtensionTarget,
     plonk::circuit_builder::CircuitBuilder,
 };
 
 use crate::{
-    constants::N_LIMBS,
-    util::{
-        pol_add_assign, pol_add_assign_ext_circuit, pol_add_wide, pol_add_wide_ext_circuit,
-        pol_mul_const, pol_mul_const_ext_circuit, pol_mul_wide, pol_mul_wide_ext_circuit,
-        pol_sub_assign, pol_sub_assign_ext_circuit, pol_sub_wide, pol_sub_wide_ext_circuit,
+    develop::constants::N_LIMBS,
+    develop::{
+        modular::write_u256,
+        utils::{
+            pol_add_assign, pol_add_assign_ext_circuit, pol_add_wide, pol_add_wide_ext_circuit,
+            pol_mul_const_ext_circuit, pol_mul_scalar, pol_mul_wide, pol_mul_wide_ext_circuit,
+            pol_sub_assign, pol_sub_assign_ext_circuit, pol_sub_wide, pol_sub_wide_ext_circuit,
+        },
     },
 };
+
+use super::modular::{generate_modular_op, read_u256, ModulusAux};
 
 pub fn pol_mul_fq12<T>(
     a_coeffs: Vec<[T; N_LIMBS]>,
@@ -58,7 +67,7 @@ where
     let mut out_coeffs: Vec<[T; 2 * N_LIMBS - 1]> = Vec::with_capacity(12);
     for i in 0..6 {
         if i < 5 {
-            let nine_times_a0b0_minus_a1b1 = pol_mul_const(a0b0_minus_a1b1[i + 6], xi);
+            let nine_times_a0b0_minus_a1b1 = pol_mul_scalar(a0b0_minus_a1b1[i + 6], xi);
             let mut coeff = pol_add_wide(a0b0_minus_a1b1[i], nine_times_a0b0_minus_a1b1);
             pol_sub_assign(&mut coeff, &a0b1_plus_a1b0[i + 6]);
             out_coeffs.push(coeff);
@@ -69,7 +78,7 @@ where
     for i in 0..6 {
         if i < 5 {
             let mut coeff = pol_add_wide(a0b1_plus_a1b0[i], a0b0_minus_a1b1[i + 6]);
-            let nine_times_a0b1_plus_a1b0 = pol_mul_const(a0b1_plus_a1b0[i + 6], xi);
+            let nine_times_a0b1_plus_a1b0 = pol_mul_scalar(a0b1_plus_a1b0[i + 6], xi);
             pol_add_assign(&mut coeff, &nine_times_a0b1_plus_a1b0);
             out_coeffs.push(coeff);
         } else {
@@ -148,20 +157,56 @@ pub fn pol_mul_fq12_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
     out_coeffs
 }
 
+/// 12*N_LIMBS
+pub fn write_fq12<F: Copy, const NUM_COL: usize>(
+    lv: &mut [F; NUM_COL],
+    input: &Vec<[F; N_LIMBS]>,
+    cur_col: &mut usize,
+) {
+    assert!(input.len() == 12);
+    input
+        .iter()
+        .for_each(|coeff| write_u256(lv, coeff, cur_col));
+}
+
+/// 12*N_LIMBS
+pub fn read_fq12<F: Copy + Debug, const NUM_COL: usize>(
+    lv: &[F; NUM_COL],
+    cur_col: &mut usize,
+) -> Vec<[F; N_LIMBS]> {
+    (0..12).map(|_| read_u256(lv, cur_col)).collect_vec()
+}
+
+pub fn generate_fq12_modular_op<F: PrimeField64>(
+    modulus: BigInt,
+    input: &Vec<[i64; 2 * N_LIMBS - 1]>,
+) -> (Vec<[F; N_LIMBS]>, Vec<ModulusAux<F>>, Vec<F>) {
+    assert!(input.len() == 12);
+    let mut outputs = vec![];
+    let mut auxs = vec![];
+    let mut quot_signs = vec![];
+    for i in 0..12 {
+        let (output, quot_sign, aux) = generate_modular_op::<F>(modulus.clone(), input[i]);
+        outputs.push(output);
+        auxs.push(aux);
+        quot_signs.push(quot_sign);
+    }
+    (outputs, auxs, quot_signs)
+}
+
 #[cfg(test)]
 mod tests {
     use core::marker::PhantomData;
 
-    use ark_bn254::{Fq, Fq12};
+    use ark_bn254::Fq12;
     use ark_std::UniformRand;
     use itertools::Itertools;
-    use num::FromPrimitive;
-    use num_bigint::{BigInt, BigUint};
     use plonky2::{
         field::{
             extension::{Extendable, FieldExtension},
             packed::PackedField,
             polynomial::PolynomialValues,
+            types::Field as Plonky2Field,
         },
         hash::hash_types::RichField,
         iop::witness::PartialWitness,
@@ -175,13 +220,23 @@ mod tests {
 
     use crate::{
         config::StarkConfig,
-        constants::{LIMB_BITS, N_LIMBS},
         constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
+        develop::constants::N_LIMBS,
         develop::{
-            fq12::{pol_mul_fq12, pol_mul_fq12_ext_circuit},
-            modular::{read_quot, write_modulus_aux, write_quot, write_u256},
+            fq12::{generate_fq12_modular_op, pol_mul_fq12, pol_mul_fq12_ext_circuit, write_fq12},
+            modular::{
+                bn254_base_modulus_packfield, eval_modular_op, eval_modular_op_circuit,
+                write_modulus_aux,
+            },
+            range_check::{
+                eval_split_u16_range_check, eval_split_u16_range_check_circuit,
+                generate_split_u16_range_check, split_u16_range_check_pairs,
+            },
         },
-        lookup::{eval_lookups, eval_lookups_circuit, generate_range_checks},
+        develop::{
+            modular::bn254_base_modulus_bigint,
+            utils::{columns_to_fq12, fq12_to_columns},
+        },
         permutation::PermutationPair,
         prover::prove,
         recursive_verifier::{
@@ -189,22 +244,20 @@ mod tests {
             verify_stark_proof_circuit,
         },
         stark::Stark,
-        util::{
-            bigint_to_columns, columns_to_fq12, fq12_to_columns, pol_sub_assign,
-            pol_sub_assign_ext_circuit,
-        },
         vars::{StarkEvaluationTargets, StarkEvaluationVars},
         verifier::verify_stark_proof,
     };
 
-    use crate::develop::modular::{
-        generate_modular_op, modular_constr_poly, modular_constr_poly_ext_circuit,
-        read_modulus_aux, read_u256, ModulusAux,
-    };
+    use crate::develop::modular::read_modulus_aux;
 
-    const RANGE32_COLS: usize = 96 * N_LIMBS - 24;
-    const MAIN_COLS: usize = RANGE32_COLS + 25 * N_LIMBS + 1;
-    const TABLE_COL: usize = MAIN_COLS;
+    use super::read_fq12;
+
+    const MAIN_COLS: usize = 108 * N_LIMBS + 1;
+    const START_RANGE_CHECK: usize = 24 * N_LIMBS;
+    const NUM_RANGE_CHECK: usize = 84 * N_LIMBS - 12;
+    const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECK;
+
+    const ROWS: usize = 512;
 
     #[derive(Clone, Copy)]
     pub struct Fq12Stark<F: RichField + Extendable<D>, const D: usize> {
@@ -220,46 +273,34 @@ mod tests {
 
         pub fn generate_trace(&self) -> Vec<PolynomialValues<F>> {
             let mut rng = rand::thread_rng();
-            let neg_one: BigUint = Fq::from(-1).into();
-            let modulus_biguint: BigUint = neg_one + BigUint::from_usize(1).unwrap();
-            let modulus_bigint: BigInt = modulus_biguint.into();
-            let modulus: [F; N_LIMBS] =
-                bigint_to_columns(&modulus_bigint).map(|x| F::from_canonical_i64(x));
+            let xi = 9;
+            let modulus = bn254_base_modulus_bigint();
 
             let mut rows = vec![];
 
-            for _ in 0..1 << 2 {
-                let input0_fq12 = Fq12::rand(&mut rng);
-                let input1_fq12 = Fq12::rand(&mut rng);
-                let output_expected: Fq12 = input0_fq12 * input1_fq12;
+            for _ in 0..ROWS {
+                let x_fq12 = Fq12::rand(&mut rng);
+                let y_fq12 = Fq12::rand(&mut rng);
+                let output_expected: Fq12 = x_fq12 * y_fq12;
 
-                let input0_limbs = fq12_to_columns(input0_fq12);
-                let input1_limbs = fq12_to_columns(input1_fq12);
+                let x_i64 = fq12_to_columns(x_fq12);
 
-                let pol_input = pol_mul_fq12(input0_limbs.clone(), input1_limbs.clone(), 9);
+                let y_i64 = fq12_to_columns(y_fq12);
 
-                let input0_coeffs = input0_limbs
+                let pol_input = pol_mul_fq12(x_i64.clone(), y_i64.clone(), xi);
+
+                let x = x_i64
                     .iter()
                     .map(|coeff| coeff.map(|x| F::from_canonical_i64(x)))
                     .collect_vec();
-                let input1_coeffs = input1_limbs
+                let y = y_i64
                     .iter()
                     .map(|coeff| coeff.map(|x| F::from_canonical_i64(x)))
                     .collect_vec();
 
-                let mut output_coeffs = vec![];
-                let mut auxs = vec![];
-                let mut quots = vec![];
+                let (z, auxs, quot_signs) = generate_fq12_modular_op(modulus.clone(), &pol_input);
 
-                for i in 0..12 {
-                    let (output, quot, aux) =
-                        generate_modular_op::<F>(modulus_bigint.clone(), pol_input[i]);
-                    output_coeffs.push(output);
-                    auxs.push(aux);
-                    quots.push(quot);
-                }
-
-                let output_actual = columns_to_fq12(&output_coeffs);
+                let output_actual = columns_to_fq12(&z);
 
                 assert!(output_expected == output_actual);
 
@@ -267,66 +308,35 @@ mod tests {
 
                 let mut cur_col = 0;
 
-                input0_coeffs
-                    .iter()
-                    .for_each(|coeff| write_u256(&mut lv, coeff, &mut cur_col));
+                write_fq12(&mut lv, &x, &mut cur_col); // 12*N_LIMBS
+                write_fq12(&mut lv, &y, &mut cur_col); // 12*N_LIMBS
+                write_fq12(&mut lv, &z, &mut cur_col); // 12*N_LIMBS
 
-                input1_coeffs
-                    .iter()
-                    .for_each(|coeff| write_u256(&mut lv, coeff, &mut cur_col));
-                output_coeffs
-                    .iter()
-                    .for_each(|coeff| write_u256(&mut lv, coeff, &mut cur_col));
+                // 12*(6*N_LIMBS - 1) = 72*N_LIMBS - 12
                 auxs.iter().for_each(|aux| {
-                    write_modulus_aux::<_, MAIN_COLS, N_LIMBS>(&mut lv, aux, &mut cur_col);
+                    write_modulus_aux(&mut lv, aux, &mut cur_col);
+                });
+                // 12
+                quot_signs.iter().for_each(|&sign| {
+                    lv[cur_col] = sign;
+                    cur_col += 1;
                 });
 
-                quots.iter().for_each(|quot| {
-                    write_quot(&mut lv, quot, &mut cur_col);
-                });
-
-                write_u256(&mut lv, &modulus, &mut cur_col);
-
+                // filter
                 lv[cur_col] = F::ONE;
                 cur_col += 1;
 
+                // MAIN_COLS = 3*12*N_LIMBS + 72*N_LIMBS - 12 + 12 + 1 = 108*N_LIMBS  + 1
+                // START_RANGE_CHECK = 24*N_LIMBS
+                // NUM_RANGE_CHECK = 84*N_LIMBS - 12
                 assert!(cur_col == MAIN_COLS);
 
-                auxs.iter().for_each(|aux| {
-                    let ModulusAux {
-                        out_aux_red,
-                        aux_input_lo,
-                        aux_input_hi,
-                    } = aux;
-                    assert!(out_aux_red
-                        .iter()
-                        .all(|x| x.to_canonical_u64() < (1 << LIMB_BITS)));
-                    assert!(aux_input_lo
-                        .iter()
-                        .all(|x| x.to_canonical_u64() < (1 << LIMB_BITS)));
-                    assert!(aux_input_hi
-                        .iter()
-                        .all(|x| x.to_canonical_u64() < (1 << LIMB_BITS)));
-                });
                 rows.push(lv);
-            }
-
-            let range_max = 1 << LIMB_BITS;
-            let padded_len = rows.len().next_power_of_two();
-            for _ in rows.len()..std::cmp::max(padded_len, range_max) {
-                rows.push([F::ZERO; MAIN_COLS]);
             }
 
             let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
 
-            let range_check_cols = trace_cols[0..RANGE32_COLS].to_vec();
-            let (table, pairs) = generate_range_checks(range_max, &range_check_cols);
-
-            trace_cols.push(table);
-            pairs.iter().for_each(|(c_perm, t_perm)| {
-                trace_cols.push(c_perm.to_vec());
-                trace_cols.push(t_perm.to_vec());
-            });
+            generate_split_u16_range_check(START_RANGE_CHECK..END_RANGE_CHECK, &mut trace_cols);
 
             trace_cols
                 .into_iter()
@@ -336,7 +346,7 @@ mod tests {
     }
 
     impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12Stark<F, D> {
-        const COLUMNS: usize = MAIN_COLS + 1 + 2 * RANGE32_COLS;
+        const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECK;
         const PUBLIC_INPUTS: usize = 0;
 
         fn eval_packed_generic<FE, P, const D2: usize>(
@@ -349,71 +359,50 @@ mod tests {
         {
             let lv = vars.local_values.clone();
 
-            for i in (MAIN_COLS + 1..MAIN_COLS + 1 + 2 * RANGE32_COLS).step_by(2) {
-                eval_lookups(vars, yield_constr, i, i + 1);
-            }
+            eval_split_u16_range_check(
+                vars,
+                yield_constr,
+                MAIN_COLS,
+                START_RANGE_CHECK..END_RANGE_CHECK,
+            );
 
             let mut cur_col = 0;
 
-            let input0_coeffs = (0..12)
-                .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-                .collect_vec();
-            let input1_coeffs = (0..12)
-                .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-                .collect_vec();
-            let output_coeffs = (0..12)
-                .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-                .collect_vec();
+            let x = read_fq12(&lv, &mut cur_col);
+            let y = read_fq12(&lv, &mut cur_col);
+            let z = read_fq12(&lv, &mut cur_col);
 
             let auxs = (0..12)
-                .map(|_| read_modulus_aux::<_, N_LIMBS>(&lv, &mut cur_col))
+                .map(|_| read_modulus_aux(&lv, &mut cur_col))
                 .collect_vec();
-
-            let quots = (0..12)
-                .map(|_| read_quot::<_, { 2 * N_LIMBS }>(&lv, &mut cur_col))
+            let quot_signs = (0..12)
+                .map(|_| {
+                    let sign = lv[cur_col];
+                    cur_col += 1;
+                    sign
+                })
                 .collect_vec();
-            let modulus: [_; N_LIMBS] = read_u256(&lv, &mut cur_col);
 
             let filter = lv[cur_col];
             cur_col += 1;
 
             assert!(cur_col == MAIN_COLS);
 
-            let xi: P = P::ONES
-                + P::ONES
-                + P::ONES
-                + P::ONES
-                + P::ONES
-                + P::ONES
-                + P::ONES
-                + P::ONES
-                + P::ONES;
-            let input_coeffs = pol_mul_fq12(input0_coeffs, input1_coeffs, xi);
+            let xi: P = P::Scalar::from_canonical_u32(9).into();
+            let input = pol_mul_fq12(x, y, xi);
 
-            for i in 0..12 {
-                let ModulusAux {
-                    out_aux_red,
-                    aux_input_lo,
-                    aux_input_hi,
-                } = auxs[i];
-
-                let constr_poly = modular_constr_poly::<P>(
+            let modulus = bn254_base_modulus_packfield();
+            (0..12).for_each(|i| {
+                eval_modular_op(
                     yield_constr,
                     filter,
                     modulus,
-                    output_coeffs[i],
-                    out_aux_red,
-                    quots[i],
-                    aux_input_lo,
-                    aux_input_hi,
-                );
-
-                let mut constr_poly_copy = constr_poly;
-                pol_sub_assign(&mut constr_poly_copy, &input_coeffs[i]);
-                for &c in constr_poly_copy.iter() {
-                    yield_constr.constraint(filter * c);
-                }
-            }
+                    input[i],
+                    z[i],
+                    quot_signs[i],
+                    &auxs[i],
+                )
+            });
         }
 
         fn eval_ext_circuit(
@@ -424,67 +413,54 @@ mod tests {
         ) {
             let lv = vars.local_values.clone();
 
-            for i in (MAIN_COLS + 1..MAIN_COLS + 1 + 2 * RANGE32_COLS).step_by(2) {
-                eval_lookups_circuit(builder, vars, yield_constr, i, i + 1);
-            }
+            eval_split_u16_range_check_circuit(
+                builder,
+                vars,
+                yield_constr,
+                MAIN_COLS,
+                START_RANGE_CHECK..END_RANGE_CHECK,
+            );
 
             let mut cur_col = 0;
 
-            let input0_coeffs = (0..12)
-                .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-                .collect_vec();
-            let input1_coeffs = (0..12)
-                .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-                .collect_vec();
-            let output_coeffs = (0..12)
-                .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-                .collect_vec();
+            let x = read_fq12(&lv, &mut cur_col);
+            let y = read_fq12(&lv, &mut cur_col);
+            let z = read_fq12(&lv, &mut cur_col);
 
             let auxs = (0..12)
-                .map(|_| read_modulus_aux::<_, N_LIMBS>(&lv, &mut cur_col))
+                .map(|_| read_modulus_aux(&lv, &mut cur_col))
                 .collect_vec();
-
-            let quots = (0..12)
-                .map(|_| read_quot::<_, { 2 * N_LIMBS }>(&lv, &mut cur_col))
+            let quot_signs = (0..12)
+                .map(|_| {
+                    let sign = lv[cur_col];
+                    cur_col += 1;
+                    sign
+                })
                 .collect_vec();
-            let modulus: [_; N_LIMBS] = read_u256(&lv, &mut cur_col);
 
             let filter = lv[cur_col];
             cur_col += 1;
 
             assert!(cur_col == MAIN_COLS);
 
-            let mut nine = [F::ZERO; D];
-            nine[0] = F::from_canonical_usize(9);
-            let xi = F::Extension::from_basefield_array(nine);
-            let input_coeffs = pol_mul_fq12_ext_circuit(builder, input0_coeffs, input1_coeffs, xi);
+            let modulus: [F::Extension; N_LIMBS] = bn254_base_modulus_packfield();
+            let modulus = modulus.map(|x| builder.constant_extension(x));
 
-            for i in 0..12 {
-                let ModulusAux {
-                    out_aux_red,
-                    aux_input_lo,
-                    aux_input_hi,
-                } = auxs[i];
+            let xi = F::Extension::from_canonical_u32(9);
 
-                let constr_poly = modular_constr_poly_ext_circuit(
+            let input = pol_mul_fq12_ext_circuit(builder, x, y, xi);
+            (0..12).for_each(|i| {
+                eval_modular_op_circuit(
                     builder,
                     yield_constr,
                     filter,
                     modulus,
-                    output_coeffs[i],
-                    out_aux_red,
-                    quots[i],
-                    aux_input_lo,
-                    aux_input_hi,
-                );
-
-                let mut constr_poly_copy = constr_poly;
-                pol_sub_assign_ext_circuit(builder, &mut constr_poly_copy, &input_coeffs[i]);
-                for &c in constr_poly_copy.iter() {
-                    let t = builder.mul_extension(filter, c);
-                    yield_constr.constraint(builder, t);
-                }
-            }
+                    input[i],
+                    z[i],
+                    quot_signs[i],
+                    &auxs[i],
+                )
+            });
         }
 
         fn constraint_degree(&self) -> usize {
@@ -492,16 +468,7 @@ mod tests {
         }
 
         fn permutation_pairs(&self) -> Vec<PermutationPair> {
-            let mut pairs = (0..RANGE32_COLS)
-                .map(|i| PermutationPair::singletons(i, MAIN_COLS + 1 + 2 * i))
-                .collect_vec();
-            let pairs_table = (0..RANGE32_COLS)
-                .map(|i| PermutationPair::singletons(TABLE_COL, MAIN_COLS + 2 + 2 * i))
-                .collect_vec();
-
-            pairs.extend(pairs_table);
-
-            pairs
+            split_u16_range_check_pairs(MAIN_COLS, START_RANGE_CHECK..END_RANGE_CHECK)
         }
     }
 
@@ -513,7 +480,6 @@ mod tests {
         type S = Fq12Stark<F, D>;
 
         let inner_config = StarkConfig::standard_fast_config();
-
         let stark = S::new();
         let trace = stark.generate_trace();
         let public_inputs = vec![];
@@ -529,13 +495,12 @@ mod tests {
 
         let circuit_config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
-        let mut pw = PartialWitness::new();
+        let mut pw = PartialWitness::<F>::new();
         let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
+        dbg!(degree_bits);
         let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
         set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
-
         verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
-
         let data = builder.build::<C>();
         let _proof = data.prove(pw).unwrap();
     }

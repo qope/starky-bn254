@@ -1,12 +1,13 @@
+use core::fmt;
 use core::marker::PhantomData;
 
-use ark_bn254::{Fq, Fq12, Fr};
+use ark_bn254::{Fq12, Fr};
 use ark_ff::Field;
 use ark_std::UniformRand;
 use itertools::Itertools;
-use num::FromPrimitive;
-use num_bigint::{BigInt, BigUint};
+use num_bigint::BigUint;
 use plonky2::field::types::Field as plonky2_field;
+use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::{
     field::{
         extension::{Extendable, FieldExtension},
@@ -14,53 +15,112 @@ use plonky2::{
         polynomial::PolynomialValues,
     },
     hash::hash_types::RichField,
-    iop::witness::PartialWitness,
-    plonk::{
-        circuit_builder::CircuitBuilder,
-        circuit_data::CircuitConfig,
-        config::{GenericConfig, PoseidonGoldilocksConfig},
-    },
-    util::{timing::TimingTree, transpose},
+    plonk::circuit_builder::CircuitBuilder,
+    util::transpose,
 };
 
-use crate::develop::fq12::{pol_mul_fq12, pol_mul_fq12_ext_circuit};
-use crate::develop::fq_exp::eval_instruction_ext_circuit;
-use crate::native::MyFq12;
+use crate::develop::fq12::{
+    generate_fq12_modular_op, pol_mul_fq12, pol_mul_fq12_ext_circuit, read_fq12, write_fq12,
+};
+use crate::develop::range_check::{
+    eval_u16_range_check, eval_u16_range_check_circuit, generate_u16_range_check,
+};
+use crate::develop::utils::{biguint_to_bits, columns_to_fq12, fq12_to_columns};
 use crate::{
-    config::StarkConfig,
-    constants::{LIMB_BITS, N_LIMBS},
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
-    develop::{
-        fq_exp::{eval_instruction, next_instruction, read_instruction, write_instruction},
-        modular::{read_quot, write_modulus_aux, write_quot, write_u256},
-    },
-    lookup::{eval_lookups, eval_lookups_circuit, generate_range_checks},
+    develop::constants::N_LIMBS,
+    develop::modular::write_modulus_aux,
     permutation::PermutationPair,
-    prover::prove,
-    recursive_verifier::{
-        add_virtual_stark_proof_with_pis, set_stark_proof_with_pis_target,
-        verify_stark_proof_circuit,
-    },
     stark::Stark,
-    util::{
-        bigint_to_columns, biguint_to_bits, columns_to_bigint, fq_to_columns, pol_mul_wide,
-        pol_mul_wide_ext_circuit, pol_sub_assign, pol_sub_assign_ext_circuit,
-    },
     vars::{StarkEvaluationTargets, StarkEvaluationVars},
-    verifier::verify_stark_proof,
 };
 
 use crate::develop::modular::{
-    generate_modular_op, modular_constr_poly, modular_constr_poly_ext_circuit, read_modulus_aux,
-    read_u256,
+    bn254_base_modulus_bigint, eval_modular_op_circuit, read_modulus_aux,
 };
 
-const BITS_LEN: usize = 256;
-const INSTRUCTION_LEN: usize = 2 * BITS_LEN;
+use super::modular::{bn254_base_modulus_packfield, eval_modular_op};
+use super::range_check::u16_range_check_pairs;
 
-const START_INSTRUCTION: usize = 109 * N_LIMBS - 24;
-const MAIN_COLS: usize = START_INSTRUCTION + 3 * INSTRUCTION_LEN;
-const RANGE32_COLS: usize = 84 * N_LIMBS - 24;
+pub fn write_instruction<F: Copy, const N: usize, const INSTRUCTION_LEN: usize>(
+    lv: &mut [F; N],
+    instruction: &[F; INSTRUCTION_LEN],
+    cur_col: &mut usize,
+) {
+    lv[*cur_col..*cur_col + INSTRUCTION_LEN].copy_from_slice(instruction);
+    *cur_col += INSTRUCTION_LEN;
+}
+
+pub fn read_instruction<F: Clone + fmt::Debug, const N: usize, const INSTRUCTION_LEN: usize>(
+    lv: &[F; N],
+    cur_col: &mut usize,
+) -> [F; INSTRUCTION_LEN] {
+    let output = lv[*cur_col..*cur_col + INSTRUCTION_LEN].to_vec();
+    *cur_col += INSTRUCTION_LEN;
+    output.try_into().unwrap()
+}
+
+pub fn eval_bool<P: PackedField>(yield_constr: &mut ConstraintConsumer<P>, val: P) {
+    yield_constr.constraint(val * val - val);
+}
+
+pub fn eval_bool_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+    val: ExtensionTarget<D>,
+) {
+    let t = builder.mul_sub_extension(val, val, val);
+    yield_constr.constraint(builder, t);
+}
+
+pub fn fq12_equal_transition<P: PackedField>(
+    yield_constr: &mut ConstraintConsumer<P>,
+    filter: P,
+    x: &Vec<[P; N_LIMBS]>,
+    y: &Vec<[P; N_LIMBS]>,
+) {
+    assert!(x.len() == 12 && y.len() == 12);
+    (0..12).for_each(|i| {
+        let x_i = x[i];
+        let y_i = y[i];
+        x_i.iter()
+            .zip(y_i.iter())
+            .for_each(|(&x, &y)| yield_constr.constraint_transition(filter * (x - y)));
+    });
+}
+
+pub fn fq12_equal_transition_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+    filter: ExtensionTarget<D>,
+    x: &Vec<[ExtensionTarget<D>; N_LIMBS]>,
+    y: &Vec<[ExtensionTarget<D>; N_LIMBS]>,
+) {
+    assert!(x.len() == 12 && y.len() == 12);
+    (0..12).for_each(|i| {
+        let x_i = x[i];
+        let y_i = y[i];
+        x_i.iter().zip(y_i.iter()).for_each(|(&x, &y)| {
+            let diff = builder.sub_extension(x, y);
+            let t = builder.mul_extension(filter, diff);
+            yield_constr.constraint_transition(builder, t);
+        });
+    });
+}
+
+const BITS_LEN: usize = 256;
+
+const START_RANGE_CHECK: usize = 24 * N_LIMBS;
+const NUM_RANGE_CHECK: usize = 84 * N_LIMBS - 12;
+const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECK;
+
+const IS_SQ_COL: usize = END_RANGE_CHECK + 12;
+const IS_NOOP_COL: usize = IS_SQ_COL + 1;
+const IS_MUL_COL: usize = IS_SQ_COL + 2;
+
+const MAIN_COLS: usize = IS_MUL_COL + BITS_LEN;
+
+const ROWS: usize = 1 << 16;
 
 #[derive(Clone, Copy)]
 pub struct Fq12ExpStark<F: RichField + Extendable<D>, const D: usize> {
@@ -74,277 +134,166 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
         }
     }
 
-    pub fn generate_trace(&self) -> (Vec<F>, Vec<PolynomialValues<F>>) {
-        let mut pi = [F::ZERO; 3 * INSTRUCTION_LEN];
+    pub fn generate_trace(&self) -> Vec<PolynomialValues<F>> {
         let mut rng = rand::thread_rng();
 
-        let neg_one: BigUint = Fq::from(-1).into();
-        let modulus_biguint: BigUint = neg_one + BigUint::from_usize(1).unwrap();
-        let modulus_bigint: BigInt = modulus_biguint.into();
-        let modulus: [F; N_LIMBS] =
-            bigint_to_columns(&modulus_bigint).map(|x| F::from_canonical_i64(x));
-
+        let modulus = bn254_base_modulus_bigint();
         let xi = 9;
 
         let exp_val: Fr = Fr::rand(&mut rng);
-        let exp_bits: [bool; BITS_LEN] = biguint_to_bits(&exp_val.into(), BITS_LEN)
-            .try_into()
-            .unwrap();
-        let square_instruction = (0..BITS_LEN).flat_map(|_| [F::ZERO, F::ONE]).collect_vec();
-        let mul_instruction = (0..BITS_LEN)
-            .flat_map(|i| [F::from_bool(exp_bits[i]), F::ZERO])
-            .collect_vec();
-        let no_instruction = square_instruction
+        let exp_bits: Vec<F> = biguint_to_bits(&exp_val.into(), BITS_LEN)
             .iter()
-            .zip(mul_instruction.iter())
-            .map(|(&is_sq, &is_mul)| (F::ONE - is_sq) * (F::ONE - is_mul))
+            .map(|&b| F::from_bool(b))
             .collect_vec();
-        let mut cur_col = 0;
-        write_instruction::<_, { 3 * INSTRUCTION_LEN }, INSTRUCTION_LEN>(
-            &mut pi,
-            &square_instruction.clone().try_into().unwrap(),
-            &mut cur_col,
-        );
-        write_instruction::<_, { 3 * INSTRUCTION_LEN }, INSTRUCTION_LEN>(
-            &mut pi,
-            &mul_instruction.clone().try_into().unwrap(),
-            &mut cur_col,
-        );
-        write_instruction::<_, { 3 * INSTRUCTION_LEN }, INSTRUCTION_LEN>(
-            &mut pi,
-            &no_instruction.clone().try_into().unwrap(),
-            &mut cur_col,
-        );
+        assert!(exp_bits.len() == BITS_LEN);
 
         let x_input = Fq12::rand(&mut rng);
-        let x_myfq12: MyFq12 = x_input.into();
-        let one_myfq12: MyFq12 = Fq12::ONE.into();
-
         let exp_val_biguint: BigUint = exp_val.into();
         let x_exp_expected: Fq12 = x_input.pow(&exp_val_biguint.to_u64_digits());
 
-        let mut x_coeffs: Vec<[_; N_LIMBS]> = x_myfq12
-            .coeffs
+        let x_i64 = fq12_to_columns(x_input);
+        let y_i64 = fq12_to_columns(Fq12::ONE);
+
+        let x = x_i64
             .iter()
-            .map(|&c| fq_to_columns(c))
+            .map(|coeff| coeff.map(|x| F::from_canonical_i64(x)))
             .collect_vec();
-        let mut y_coeffs: Vec<[_; N_LIMBS]> = one_myfq12
-            .coeffs
+        let y = y_i64
             .iter()
-            .map(|&c| fq_to_columns(c))
+            .map(|coeff| coeff.map(|x| F::from_canonical_i64(x)))
             .collect_vec();
 
-        let mut rows: Vec<[F; MAIN_COLS]> = vec![];
         let mut lv = [F::ZERO; MAIN_COLS];
-
         let mut cur_col = 0;
-        // 12 * N_LIMBS
-        x_coeffs.iter().for_each(|coeff| {
-            write_u256(
-                &mut lv,
-                &coeff.map(|x| F::from_canonical_i64(x)),
-                &mut cur_col,
-            );
-        });
-        // 12 * N_LIMBS
-        y_coeffs.iter().for_each(|coeff| {
-            write_u256(
-                &mut lv,
-                &coeff.map(|x| F::from_canonical_i64(x)),
-                &mut cur_col,
-            );
-        });
+        write_fq12(&mut lv, &x, &mut cur_col); //12*N_LIMBS
+        write_fq12(&mut lv, &y, &mut cur_col); //12*N_LIMBS
 
-        cur_col = START_INSTRUCTION;
-        write_instruction::<_, MAIN_COLS, INSTRUCTION_LEN>(
+        lv[IS_SQ_COL] = F::ZERO;
+        cur_col = IS_MUL_COL;
+        write_instruction::<_, MAIN_COLS, BITS_LEN>(
             &mut lv,
-            &square_instruction.clone().try_into().unwrap(),
+            &exp_bits.try_into().unwrap(),
             &mut cur_col,
         );
-        write_instruction::<_, MAIN_COLS, INSTRUCTION_LEN>(
-            &mut lv,
-            &mul_instruction.clone().try_into().unwrap(),
-            &mut cur_col,
-        );
-        write_instruction::<_, MAIN_COLS, INSTRUCTION_LEN>(
-            &mut lv,
-            &no_instruction.clone().try_into().unwrap(),
-            &mut cur_col,
-        );
+        lv[IS_NOOP_COL] = F::ONE - lv[IS_MUL_COL];
 
-        let range_max = 1 << LIMB_BITS;
-        for _ in 0..range_max {
+        let mut rows = vec![];
+
+        for _ in 0..ROWS {
+            // read x, y, and instruction
             let mut cur_col = 0;
-            x_coeffs = (0..12)
-                .map(|_| {
-                    read_u256::<_, N_LIMBS>(&lv, &mut cur_col).map(|a| a.to_canonical_u64() as i64)
-                })
+            let x = read_fq12(&lv, &mut cur_col);
+            let y = read_fq12(&lv, &mut cur_col);
+            let is_sq = lv[IS_SQ_COL];
+            let is_mul = lv[IS_MUL_COL];
+            let is_noop = lv[IS_NOOP_COL];
+
+            cur_col = IS_MUL_COL;
+            let mul_instruction = read_instruction::<_, MAIN_COLS, BITS_LEN>(&lv, &mut cur_col);
+
+            let x_i64 = x
+                .iter()
+                .map(|limb| limb.map(|x| x.to_canonical_u64() as i64))
                 .collect_vec();
-            y_coeffs = (0..12)
-                .map(|_| {
-                    read_u256::<_, N_LIMBS>(&lv, &mut cur_col).map(|a| a.to_canonical_u64() as i64)
-                })
+            let y_i64 = y
+                .iter()
+                .map(|limb| limb.map(|x| x.to_canonical_u64() as i64))
                 .collect_vec();
-            assert!(cur_col == 24 * N_LIMBS);
 
-            // spare room for aux(5*N_LIMBS - 2) and quot(2*N_LIMBS)
-            // because instructions does not have to be range checked
-            cur_col = START_INSTRUCTION;
-            let square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
-            let mul_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
-            let no_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
-            let is_sq = square_instruction[0] == F::ONE;
-            let is_mul = mul_instruction[0] == F::ONE;
-            let is_noop = no_instruction[0] == F::ONE;
-
-            assert!(cur_col == MAIN_COLS);
-
-            let x_sq = pol_mul_fq12(x_coeffs.clone(), x_coeffs.clone(), xi);
-            let x_mul_y = pol_mul_fq12(x_coeffs.clone(), y_coeffs.clone(), xi);
-            let zero = vec![[0i64; 2 * N_LIMBS - 1]; 12];
-
-            // dbg!(is_sq, is_mul, is_noop);
-            let input = if is_sq {
-                x_sq
-            } else if is_mul {
-                x_mul_y
+            // compute input
+            let input = if is_sq == F::ONE {
+                assert!(is_mul == F::ZERO && is_noop == F::ZERO);
+                pol_mul_fq12(x_i64.clone(), x_i64.clone(), xi)
+            } else if is_mul == F::ONE {
+                assert!(is_sq == F::ZERO && is_noop == F::ZERO);
+                pol_mul_fq12(x_i64.clone(), y_i64.clone(), xi)
             } else {
-                assert!(is_noop);
-                zero
+                assert!(is_noop == F::ONE && is_sq == F::ZERO && is_mul == F::ZERO);
+                vec![[0i64; 2 * N_LIMBS - 1]; 12]
             };
 
-            let mut output_coeffs = vec![];
-            let mut quots = vec![];
-            let mut auxs = vec![];
+            // compute output
+            let (output, auxs, quot_signs) = generate_fq12_modular_op::<F>(modulus.clone(), &input);
+            // write output
+            cur_col = 24 * N_LIMBS;
+            write_fq12(&mut lv, &output, &mut cur_col);
 
-            for i in 0..12 {
-                let (output, quot, aux) = generate_modular_op(modulus_bigint.clone(), input[i]);
-                output_coeffs.push(output);
-                quots.push(quot);
-                auxs.push(aux);
-            }
-
-            cur_col = 24 * N_LIMBS; // right after x and y
-
-            // 12*(5*N_LIMBS-2) = 60*N_LIMBS - 24
-            // thus, RANGE32_COLS = 84*N_LIMBS - 24
+            // write auxs
             auxs.iter().for_each(|aux| {
-                write_modulus_aux::<_, MAIN_COLS, N_LIMBS>(&mut lv, &aux, &mut cur_col);
+                write_modulus_aux(&mut lv, aux, &mut cur_col);
             });
-            // 12*(2*N_LIMBS) = 24*N_LIMBS
-            quots.iter().for_each(|quot| {
-                write_quot(&mut lv, &quot, &mut cur_col);
+            quot_signs.iter().for_each(|&sign| {
+                lv[cur_col] = sign;
+                cur_col += 1;
             });
-            // N_LIMBS
-            write_u256(&mut lv, &modulus, &mut cur_col);
+            assert!(cur_col == IS_SQ_COL);
 
-            // thus, 84*N_LIMBS - 24 + 25*N_LIMBS = 109*N_LIMBS - 24
-            assert!(cur_col == START_INSTRUCTION);
-
+            // transition rule
             let mut nv = [F::ZERO; MAIN_COLS];
-            let mut cur_col = 0;
+            cur_col = 0;
 
-            if is_sq {
-                output_coeffs.iter().for_each(|coeff| {
-                    write_u256(&mut nv, &coeff, &mut cur_col);
-                });
-                y_coeffs.iter().for_each(|coeff| {
-                    write_u256(
-                        &mut nv,
-                        &coeff.map(|a| F::from_canonical_i64(a)),
-                        &mut cur_col,
-                    );
-                });
-            } else if is_mul {
-                x_coeffs.iter().for_each(|coeff| {
-                    write_u256(
-                        &mut nv,
-                        &coeff.map(|a| F::from_canonical_i64(a)),
-                        &mut cur_col,
-                    );
-                });
-                output_coeffs.iter().for_each(|coeff| {
-                    write_u256(&mut nv, &coeff, &mut cur_col);
-                });
+            if is_sq == F::ONE {
+                write_fq12(&mut nv, &output, &mut cur_col);
+                write_fq12(&mut nv, &y, &mut cur_col);
+            } else if is_mul == F::ONE {
+                write_fq12(&mut nv, &x, &mut cur_col);
+                write_fq12(&mut nv, &output, &mut cur_col);
             } else {
-                assert!(is_noop);
-                x_coeffs.iter().for_each(|coeff| {
-                    write_u256(
-                        &mut nv,
-                        &coeff.map(|a| F::from_canonical_i64(a)),
-                        &mut cur_col,
-                    );
-                });
-                y_coeffs.iter().for_each(|coeff| {
-                    write_u256(
-                        &mut nv,
-                        &coeff.map(|a| F::from_canonical_i64(a)),
-                        &mut cur_col,
-                    );
-                });
+                assert!(is_noop == F::ONE);
+                write_fq12(&mut nv, &x, &mut cur_col);
+                write_fq12(&mut nv, &y, &mut cur_col);
             }
-            assert!(cur_col == 24 * N_LIMBS);
+            // transition rule for instruction
+            nv[IS_SQ_COL] = F::ONE - is_sq;
+            cur_col = IS_MUL_COL;
+            if is_sq == F::ONE {
+                // rotate instruction
+                let mut rotated_instruction = mul_instruction[1..].to_vec();
+                rotated_instruction.push(F::ZERO);
+                write_instruction::<_, MAIN_COLS, BITS_LEN>(
+                    &mut nv,
+                    &rotated_instruction.try_into().unwrap(),
+                    &mut cur_col,
+                );
+            } else {
+                write_instruction::<_, MAIN_COLS, BITS_LEN>(
+                    &mut nv,
+                    &mul_instruction.try_into().unwrap(),
+                    &mut cur_col,
+                );
+                // set nv[IS_MUL_COL] to 0 to ensure is_mul + is_sq + is_noop = 1
+                // this cell is never used.
+                nv[IS_MUL_COL] = F::ZERO;
+            }
 
-            cur_col = START_INSTRUCTION;
-            let next_square_instruction = next_instruction(&square_instruction, F::ZERO);
-            let next_mul_instruction = next_instruction(&mul_instruction, F::ZERO);
-            let next_no_instruction = next_instruction(&no_instruction, F::ONE);
-            write_instruction::<_, MAIN_COLS, INSTRUCTION_LEN>(
-                &mut nv,
-                &next_square_instruction.clone().try_into().unwrap(),
-                &mut cur_col,
-            );
-            write_instruction::<_, MAIN_COLS, INSTRUCTION_LEN>(
-                &mut nv,
-                &next_mul_instruction.clone().try_into().unwrap(),
-                &mut cur_col,
-            );
-            write_instruction::<_, MAIN_COLS, INSTRUCTION_LEN>(
-                &mut nv,
-                &next_no_instruction.clone().try_into().unwrap(),
-                &mut cur_col,
-            );
-            assert!(cur_col == MAIN_COLS);
+            nv[IS_NOOP_COL] = (F::ONE - nv[IS_MUL_COL]) * (F::ONE - nv[IS_SQ_COL]);
 
             rows.push(lv);
             lv = nv;
         }
+        assert!(rows.len() == ROWS);
 
-        let final_y_coeffs = y_coeffs.iter().map(|c| columns_to_bigint(c)).collect_vec();
-        let coeffs: Vec<Fq> = final_y_coeffs
-            .iter()
-            .map(|c| c.to_biguint().unwrap().into())
-            .collect_vec();
-
-        let final_fq12: Fq12 = MyFq12 {
-            coeffs: coeffs.try_into().unwrap(),
-        }
-        .into();
-
-        assert!(final_fq12 == x_exp_expected);
+        let mut cur_col = 12 * N_LIMBS;
+        let y = read_fq12(&lv, &mut cur_col);
+        let result = columns_to_fq12(&y);
+        assert!(result == x_exp_expected);
 
         let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
-        let (table, pairs) =
-            generate_range_checks(range_max, &trace_cols[0..RANGE32_COLS].to_vec());
 
-        trace_cols.push(table);
-        pairs.iter().for_each(|(c_perm, t_perm)| {
-            trace_cols.push(c_perm.to_vec());
-            trace_cols.push(t_perm.to_vec());
-        });
+        generate_u16_range_check(START_RANGE_CHECK..END_RANGE_CHECK, &mut trace_cols);
 
         let trace = trace_cols
             .into_iter()
             .map(|column| PolynomialValues::new(column))
             .collect();
 
-        (pi.try_into().unwrap(), trace)
+        trace
     }
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<F, D> {
-    const COLUMNS: usize = MAIN_COLS + 1 + 2 * RANGE32_COLS;
-    const PUBLIC_INPUTS: usize = 3 * INSTRUCTION_LEN;
+    const COLUMNS: usize = MAIN_COLS + 1 + 2 * NUM_RANGE_CHECK;
+    const PUBLIC_INPUTS: usize = 0;
 
     fn eval_packed_generic<FE, P, const D2: usize>(
         &self,
@@ -354,142 +303,104 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         FE: FieldExtension<D2, BaseField = F>,
         P: PackedField<Scalar = FE>,
     {
+        let xi: P = P::Scalar::from_canonical_u32(9).into();
+        let modulus = bn254_base_modulus_packfield();
+
+        eval_u16_range_check(
+            vars,
+            yield_constr,
+            MAIN_COLS,
+            START_RANGE_CHECK..END_RANGE_CHECK,
+        );
+
         let lv = vars.local_values.clone();
-        let nv = vars.next_values.clone();
-        let pi = vars.public_inputs.clone();
-
-        let xi: P =
-            P::ONES + P::ONES + P::ONES + P::ONES + P::ONES + P::ONES + P::ONES + P::ONES + P::ONES;
-
-        for i in (MAIN_COLS + 1..MAIN_COLS + 1 + 2 * RANGE32_COLS).step_by(2) {
-            eval_lookups(vars, yield_constr, i, i + 1);
-        }
-
+        // read x, y, z, and instruction
         let mut cur_col = 0;
-
-        let cur_x_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-            .collect_vec();
-        let cur_y_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-            .collect_vec();
-
+        let x = read_fq12(&lv, &mut cur_col);
+        let y = read_fq12(&lv, &mut cur_col);
+        let z = read_fq12(&lv, &mut cur_col);
         let auxs = (0..12)
-            .map(|_| read_modulus_aux::<_, N_LIMBS>(&lv, &mut cur_col))
+            .map(|_| read_modulus_aux(&lv, &mut cur_col))
             .collect_vec();
-        let quots = (0..12)
-            .map(|_| read_quot::<_, { 2 * N_LIMBS }>(&lv, &mut cur_col))
+        let quot_signs = (0..12)
+            .map(|_| {
+                let sign = lv[cur_col];
+                cur_col += 1;
+                sign
+            })
             .collect_vec();
-        let modulus: [_; N_LIMBS] = read_u256(&lv, &mut cur_col);
+        assert!(cur_col == IS_SQ_COL);
+        let is_sq = lv[IS_SQ_COL];
+        let is_mul = lv[IS_MUL_COL];
+        let is_noop = lv[IS_NOOP_COL];
 
-        let cur_square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
-        let cur_mul_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
-        let cur_no_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
+        // validation of instruction
+        eval_bool(yield_constr, is_noop);
+        yield_constr.constraint(is_sq + is_mul + is_noop - P::ONES);
 
-        assert!(cur_col == MAIN_COLS);
-
-        cur_col = 0;
-        let next_x_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&nv, &mut cur_col))
-            .collect_vec();
-        let next_y_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&nv, &mut cur_col))
-            .collect_vec();
-        cur_col = START_INSTRUCTION;
-        let next_square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
-        let next_mul_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
-        let next_no_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
-        assert!(cur_col == MAIN_COLS);
-
-        // verify in the case of is_sq == one;
-        let is_sq = cur_square_instruction[0];
-        let x_sq = pol_mul_fq12(cur_x_coeffs.clone(), cur_x_coeffs.clone(), xi);
+        // validation of z
+        let x_sq: Vec<[_; 2 * N_LIMBS - 1]> = pol_mul_fq12(x.clone(), x.clone(), xi);
+        let x_mul_y: Vec<[_; 2 * N_LIMBS - 1]> = pol_mul_fq12(x.clone(), y.clone(), xi);
 
         (0..12).for_each(|i| {
-            let constr_poly = modular_constr_poly::<P>(
+            eval_modular_op(
                 yield_constr,
                 is_sq,
                 modulus,
-                next_x_coeffs[i],
-                auxs[i].out_aux_red,
-                quots[i],
-                auxs[i].aux_input_lo,
-                auxs[i].aux_input_hi,
+                x_sq[i],
+                z[i],
+                quot_signs[i],
+                &auxs[i],
             );
-            let mut constr_poly_copy = constr_poly;
-            pol_sub_assign(&mut constr_poly_copy, &x_sq[i]);
-            for &c in constr_poly_copy.iter() {
-                yield_constr.constraint_transition(is_sq * c);
-            }
-        });
-
-        // verify in the case of is_mul == one;
-        let is_mul = cur_mul_instruction[0];
-        let x_mul_y = pol_mul_fq12(cur_x_coeffs.clone(), cur_y_coeffs.clone(), xi);
-
-        (0..12).for_each(|i| {
-            let constr_poly = modular_constr_poly::<P>(
+            eval_modular_op(
                 yield_constr,
                 is_mul,
                 modulus,
-                next_y_coeffs[i],
-                auxs[i].out_aux_red,
-                quots[i],
-                auxs[i].aux_input_lo,
-                auxs[i].aux_input_hi,
-            );
-            let mut constr_poly_copy = constr_poly;
-            pol_sub_assign(&mut constr_poly_copy, &x_mul_y[i]);
-            for &c in constr_poly_copy.iter() {
-                yield_constr.constraint_transition(is_mul * c);
-            }
+                x_mul_y[i],
+                z[i],
+                quot_signs[i],
+                &auxs[i],
+            )
         });
 
-        // verify in the case of is_noop
-        let is_noop = cur_no_instruction[0];
-        cur_x_coeffs
-            .iter()
-            .zip(next_x_coeffs.iter())
-            .for_each(|(&cx, &nx)| {
-                cx.iter().zip(nx.iter()).for_each(|(&cx_i, &nx_i)| {
-                    yield_constr.constraint_transition(is_noop * (cx_i - nx_i));
-                });
-            });
-        cur_y_coeffs
-            .iter()
-            .zip(next_y_coeffs.iter())
-            .for_each(|(&cy, &ny)| {
-                cy.iter().zip(ny.iter()).for_each(|(&cy_i, &ny_i)| {
-                    yield_constr.constraint_transition(is_noop * (cy_i - ny_i));
-                });
-            });
-        // verify the transition of instructions
-        let mut cur_col = 0;
-        let initial_square_instruction: [_; INSTRUCTION_LEN] = read_instruction(&pi, &mut cur_col);
-        let initial_mul_instruction: [_; INSTRUCTION_LEN] = read_instruction(&pi, &mut cur_col);
-        let initial_no_instruction: [_; INSTRUCTION_LEN] = read_instruction(&pi, &mut cur_col);
+        // transition rule
+        let nv = vars.next_values.clone();
+        cur_col = 0;
+        let next_x = read_fq12(&nv, &mut cur_col);
+        let next_y = read_fq12(&nv, &mut cur_col);
+        let next_is_sq = nv[IS_SQ_COL];
 
-        eval_instruction(
-            yield_constr,
-            &initial_square_instruction,
-            &cur_square_instruction,
-            &next_square_instruction,
-            P::Scalar::ZEROS,
-        );
-        eval_instruction(
-            yield_constr,
-            &initial_mul_instruction,
-            &cur_mul_instruction,
-            &next_mul_instruction,
-            P::Scalar::ZEROS,
-        );
-        eval_instruction(
-            yield_constr,
-            &initial_no_instruction,
-            &cur_no_instruction,
-            &next_no_instruction,
-            P::Scalar::ONE,
-        );
+        cur_col = IS_MUL_COL;
+        let next_instruction: [_; BITS_LEN] = read_instruction(&nv, &mut cur_col);
+
+        // if is_sq == 1
+        fq12_equal_transition(yield_constr, is_sq, &z, &next_x);
+        fq12_equal_transition(yield_constr, is_sq, &y, &next_y);
+
+        // if is_mul == 1
+        fq12_equal_transition(yield_constr, is_mul, &x, &next_x);
+        fq12_equal_transition(yield_constr, is_mul, &z, &next_y);
+
+        // if is_noop == 1
+        fq12_equal_transition(yield_constr, is_noop, &x, &next_x);
+        fq12_equal_transition(yield_constr, is_noop, &y, &next_y);
+
+        // transition rule for instruction
+        cur_col = IS_MUL_COL;
+        let instruction: [_; BITS_LEN] = read_instruction(&lv, &mut cur_col);
+        yield_constr.constraint_transition(next_is_sq + is_sq - P::ONES);
+
+        // if is_sq == 1, then rotate instruction
+        for i in 1..BITS_LEN {
+            yield_constr.constraint_transition(is_sq * (next_instruction[i - 1] - instruction[i]));
+        }
+        yield_constr.constraint_transition(is_sq * next_instruction[BITS_LEN - 1]);
+
+        // if is_sq == 0, then copy instruction, except for the first which is set to 0 (this does not have to be verified)
+        let not_is_sq = P::ONES - is_sq;
+        for i in 1..BITS_LEN {
+            yield_constr.constraint_transition(not_is_sq * (next_instruction[i] - instruction[i]));
+        }
     }
 
     fn eval_ext_circuit(
@@ -498,156 +409,119 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         vars: StarkEvaluationTargets<D, { Self::COLUMNS }, { Self::PUBLIC_INPUTS }>,
         yield_constr: &mut RecursiveConstraintConsumer<F, D>,
     ) {
+        let xi = F::Extension::from_canonical_u32(9);
+        let modulus = bn254_base_modulus_packfield().map(|x| builder.constant_extension(x));
+        let one = builder.one_extension();
+
+        eval_u16_range_check_circuit(
+            builder,
+            vars,
+            yield_constr,
+            MAIN_COLS,
+            START_RANGE_CHECK..END_RANGE_CHECK,
+        );
+
         let lv = vars.local_values.clone();
-        let nv = vars.next_values.clone();
-        let pi = vars.public_inputs.clone();
-
-        let mut nine = [F::ZERO; D];
-        nine[0] = F::from_canonical_usize(9);
-        let xi = F::Extension::from_basefield_array(nine);
-
-        for i in (MAIN_COLS + 1..MAIN_COLS + 1 + 2 * RANGE32_COLS).step_by(2) {
-            eval_lookups_circuit(builder, vars, yield_constr, i, i + 1);
-        }
-
+        // read x, y, z, and instruction
         let mut cur_col = 0;
-
-        let cur_x_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-            .collect_vec();
-        let cur_y_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&lv, &mut cur_col))
-            .collect_vec();
-
+        let x = read_fq12(&lv, &mut cur_col);
+        let y = read_fq12(&lv, &mut cur_col);
+        let z = read_fq12(&lv, &mut cur_col);
         let auxs = (0..12)
-            .map(|_| read_modulus_aux::<_, N_LIMBS>(&lv, &mut cur_col))
+            .map(|_| read_modulus_aux(&lv, &mut cur_col))
             .collect_vec();
-        let quots = (0..12)
-            .map(|_| read_quot::<_, { 2 * N_LIMBS }>(&lv, &mut cur_col))
+        let quot_signs = (0..12)
+            .map(|_| {
+                let sign = lv[cur_col];
+                cur_col += 1;
+                sign
+            })
             .collect_vec();
-        let modulus: [_; N_LIMBS] = read_u256(&lv, &mut cur_col);
+        assert!(cur_col == IS_SQ_COL);
+        let is_sq = lv[IS_SQ_COL];
+        let is_mul = lv[IS_MUL_COL];
+        let is_noop = lv[IS_NOOP_COL];
 
-        let cur_square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
-        let cur_mul_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
-        let cur_no_instruction = read_instruction::<_, INSTRUCTION_LEN>(&lv, &mut cur_col);
+        // validation of instruction
+        eval_bool_circuit(builder, yield_constr, is_noop);
+        let sum = builder.add_many_extension([is_sq, is_mul, is_noop]);
+        let diff = builder.sub_extension(sum, one);
+        yield_constr.constraint(builder, diff);
 
-        assert!(cur_col == MAIN_COLS);
-
-        cur_col = 0;
-        let next_x_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&nv, &mut cur_col))
-            .collect_vec();
-        let next_y_coeffs = (0..12)
-            .map(|_| read_u256::<_, N_LIMBS>(&nv, &mut cur_col))
-            .collect_vec();
-        cur_col = START_INSTRUCTION;
-        let next_square_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
-        let next_mul_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
-        let next_no_instruction = read_instruction::<_, INSTRUCTION_LEN>(&nv, &mut cur_col);
-        assert!(cur_col == MAIN_COLS);
-
-        // verify in the case of is_sq == one;
-        let is_sq = cur_square_instruction[0];
-        let x_sq =
-            pol_mul_fq12_ext_circuit(builder, cur_x_coeffs.clone(), cur_x_coeffs.clone(), xi);
+        // validation of z
+        let x_sq: Vec<[_; 2 * N_LIMBS - 1]> =
+            pol_mul_fq12_ext_circuit(builder, x.clone(), x.clone(), xi);
+        let x_mul_y: Vec<[_; 2 * N_LIMBS - 1]> =
+            pol_mul_fq12_ext_circuit(builder, x.clone(), y.clone(), xi);
 
         (0..12).for_each(|i| {
-            let constr_poly = modular_constr_poly_ext_circuit(
+            eval_modular_op_circuit(
                 builder,
                 yield_constr,
                 is_sq,
                 modulus,
-                next_x_coeffs[i],
-                auxs[i].out_aux_red,
-                quots[i],
-                auxs[i].aux_input_lo,
-                auxs[i].aux_input_hi,
+                x_sq[i],
+                z[i],
+                quot_signs[i],
+                &auxs[i],
             );
-            let mut constr_poly_copy = constr_poly;
-            pol_sub_assign_ext_circuit(builder, &mut constr_poly_copy, &x_sq[i]);
-            for &c in constr_poly_copy.iter() {
-                let t = builder.mul_extension(is_sq, c);
-                yield_constr.constraint_transition(builder, t);
-            }
-        });
-
-        // verify in the case of is_mul == one;
-        let is_mul = cur_mul_instruction[0];
-        let x_mul_y =
-            pol_mul_fq12_ext_circuit(builder, cur_x_coeffs.clone(), cur_y_coeffs.clone(), xi);
-
-        (0..12).for_each(|i| {
-            let constr_poly = modular_constr_poly_ext_circuit(
+            eval_modular_op_circuit(
                 builder,
                 yield_constr,
                 is_mul,
                 modulus,
-                next_y_coeffs[i],
-                auxs[i].out_aux_red,
-                quots[i],
-                auxs[i].aux_input_lo,
-                auxs[i].aux_input_hi,
-            );
-            let mut constr_poly_copy = constr_poly;
-            pol_sub_assign_ext_circuit(builder, &mut constr_poly_copy, &x_mul_y[i]);
-            for &c in constr_poly_copy.iter() {
-                let t = builder.mul_extension(is_mul, c);
-                yield_constr.constraint_transition(builder, t);
-            }
+                x_mul_y[i],
+                z[i],
+                quot_signs[i],
+                &auxs[i],
+            )
         });
 
-        // verify in the case of is_noop
-        let is_noop = cur_no_instruction[0];
-        cur_x_coeffs
-            .iter()
-            .zip(next_x_coeffs.iter())
-            .for_each(|(&cx, &nx)| {
-                cx.iter().zip(nx.iter()).for_each(|(&cx_i, &nx_i)| {
-                    let diff = builder.sub_extension(cx_i, nx_i);
-                    let t = builder.mul_extension(is_noop, diff);
-                    yield_constr.constraint_transition(builder, t);
-                });
-            });
-        cur_y_coeffs
-            .iter()
-            .zip(next_y_coeffs.iter())
-            .for_each(|(&cy, &ny)| {
-                cy.iter().zip(ny.iter()).for_each(|(&cy_i, &ny_i)| {
-                    let diff = builder.sub_extension(cy_i, ny_i);
-                    let t = builder.mul_extension(is_noop, diff);
-                    yield_constr.constraint_transition(builder, t);
-                });
-            });
-        // verify the transition of instructions
-        let mut cur_col = 0;
-        let initial_square_instruction: [_; INSTRUCTION_LEN] = read_instruction(&pi, &mut cur_col);
-        let initial_mul_instruction: [_; INSTRUCTION_LEN] = read_instruction(&pi, &mut cur_col);
-        let initial_no_instruction: [_; INSTRUCTION_LEN] = read_instruction(&pi, &mut cur_col);
+        // transition rule
+        let nv = vars.next_values.clone();
+        cur_col = 0;
+        let next_x = read_fq12(&nv, &mut cur_col);
+        let next_y = read_fq12(&nv, &mut cur_col);
+        let next_is_sq = nv[IS_SQ_COL];
 
-        eval_instruction_ext_circuit(
-            builder,
-            yield_constr,
-            &initial_square_instruction,
-            &cur_square_instruction,
-            &next_square_instruction,
-            F::Extension::ZERO,
-        );
-        eval_instruction_ext_circuit(
-            builder,
-            yield_constr,
-            &initial_mul_instruction,
-            &cur_mul_instruction,
-            &next_mul_instruction,
-            F::Extension::ZERO,
-        );
-        eval_instruction_ext_circuit(
-            builder,
-            yield_constr,
-            &initial_no_instruction,
-            &cur_no_instruction,
-            &next_no_instruction,
-            F::Extension::ONE,
-        );
+        cur_col = IS_MUL_COL;
+        let next_instruction: [_; BITS_LEN] = read_instruction(&nv, &mut cur_col);
+
+        // if is_sq == 1
+        fq12_equal_transition_circuit(builder, yield_constr, is_sq, &z, &next_x);
+        fq12_equal_transition_circuit(builder, yield_constr, is_sq, &y, &next_y);
+
+        // if is_mul == 1
+        fq12_equal_transition_circuit(builder, yield_constr, is_mul, &x, &next_x);
+        fq12_equal_transition_circuit(builder, yield_constr, is_mul, &z, &next_y);
+
+        // if is_noop == 1
+        fq12_equal_transition_circuit(builder, yield_constr, is_noop, &x, &next_x);
+        fq12_equal_transition_circuit(builder, yield_constr, is_noop, &y, &next_y);
+
+        // transition rule for instruction
+        cur_col = IS_MUL_COL;
+        let instruction: [_; BITS_LEN] = read_instruction(&lv, &mut cur_col);
+        let sum = builder.add_extension(next_is_sq, is_sq);
+        let diff = builder.sub_extension(sum, one);
+        yield_constr.constraint_transition(builder, diff);
+
+        // if is_sq == 1, then rotate instruction
+        for i in 1..BITS_LEN {
+            let diff = builder.sub_extension(next_instruction[i - 1], instruction[i]);
+            let t = builder.mul_extension(is_sq, diff);
+            yield_constr.constraint_transition(builder, t);
+        }
+        let t = builder.mul_extension(is_sq, next_instruction[BITS_LEN - 1]);
+        yield_constr.constraint_transition(builder, t);
+
+        // if is_sq == 0, then copy instruction, except for the first which is set to 0 (this does not have to be verified)
+        let not_is_sq = builder.sub_extension(one, is_sq);
+        for i in 1..BITS_LEN {
+            let diff = builder.sub_extension(next_instruction[i], instruction[i]);
+            let t = builder.mul_extension(not_is_sq, diff);
+            yield_constr.constraint_transition(builder, t);
+        }
     }
 
     fn constraint_degree(&self) -> usize {
@@ -655,49 +529,62 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
     }
 
     fn permutation_pairs(&self) -> Vec<PermutationPair> {
-        let mut pairs = (0..RANGE32_COLS)
-            .map(|i| PermutationPair::singletons(i, MAIN_COLS + 1 + 2 * i))
-            .collect_vec();
-        let pairs_table = (0..RANGE32_COLS)
-            .map(|i| PermutationPair::singletons(MAIN_COLS, MAIN_COLS + 2 + 2 * i))
-            .collect_vec();
-
-        pairs.extend(pairs_table);
-
-        pairs
+        u16_range_check_pairs(MAIN_COLS, START_RANGE_CHECK..END_RANGE_CHECK)
     }
 }
 
-#[test]
-fn test_fq12_exp() {
-    const D: usize = 2;
-    type C = PoseidonGoldilocksConfig;
-    type F = <C as GenericConfig<D>>::F;
-    type S = Fq12ExpStark<F, D>;
+#[cfg(test)]
+mod tests {
+    use plonky2::{
+        iop::witness::PartialWitness,
+        plonk::{
+            circuit_builder::CircuitBuilder,
+            circuit_data::CircuitConfig,
+            config::{GenericConfig, PoseidonGoldilocksConfig},
+        },
+        util::timing::TimingTree,
+    };
 
-    let inner_config = StarkConfig::standard_fast_config();
+    use crate::{
+        config::StarkConfig,
+        develop::fq12_exp::Fq12ExpStark,
+        prover::prove,
+        recursive_verifier::{
+            add_virtual_stark_proof_with_pis, set_stark_proof_with_pis_target,
+            verify_stark_proof_circuit,
+        },
+        verifier::verify_stark_proof,
+    };
 
-    let stark = S::new();
-    let (pi, trace) = stark.generate_trace();
-    let inner_proof = prove::<F, C, S, D>(
-        stark,
-        &inner_config,
-        trace,
-        pi.try_into().unwrap(),
-        &mut TimingTree::default(),
-    )
-    .unwrap();
-    verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
+    #[test]
+    fn test_fq12_exp() {
+        const D: usize = 2;
+        type C = PoseidonGoldilocksConfig;
+        type F = <C as GenericConfig<D>>::F;
+        type S = Fq12ExpStark<F, D>;
+        let inner_config = StarkConfig::standard_fast_config();
+        let stark = S::new();
+        let trace = stark.generate_trace();
 
-    let circuit_config = CircuitConfig::standard_recursion_config();
-    let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
-    let mut pw = PartialWitness::new();
-    let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
-    let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
-    set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
+        let pi = vec![];
+        let inner_proof = prove::<F, C, S, D>(
+            stark,
+            &inner_config,
+            trace,
+            pi.try_into().unwrap(),
+            &mut TimingTree::default(),
+        )
+        .unwrap();
+        verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
 
-    verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
-
-    let data = builder.build::<C>();
-    let _proof = data.prove(pw).unwrap();
+        let circuit_config = CircuitConfig::standard_recursion_config();
+        let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
+        let mut pw = PartialWitness::new();
+        let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
+        let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
+        set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
+        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
+        let data = builder.build::<C>();
+        let _proof = data.prove(pw).unwrap();
+    }
 }

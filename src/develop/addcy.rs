@@ -7,17 +7,17 @@ use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 
 use crate::{
-    constants::{LIMB_BITS, N_LIMBS},
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
+    develop::constants::{LIMB_BITS, N_LIMBS},
 };
 
-/// 2^-16 mod (2^64 - 2^32 + 1)
+/// 2^-8 mod (2^64 - 2^32 + 1)
 const GOLDILOCKS_INVERSE_65536: u64 = 18446462594437939201;
 
 // 繰り上げの足し算を行う
 pub fn eval_packed_generic_addcy<P: PackedField>(
     yield_constr: &mut ConstraintConsumer<P>,
-    filter: P,
+    filter: P,  
     x: &[P],
     y: &[P],
     z: &[P],
@@ -30,9 +30,9 @@ pub fn eval_packed_generic_addcy<P: PackedField>(
 
     let overflow = P::Scalar::from_canonical_u64(1u64 << LIMB_BITS);
     let overflow_inv = P::Scalar::from_canonical_u64(GOLDILOCKS_INVERSE_65536);
-    debug_assert!(
+    assert!(
         overflow * overflow_inv == P::Scalar::ONE,
-        "only works with LIMB_BITS=16 and F=Goldilocks"
+        "only works with LIMB_BITS=8 and F=Goldilocks"
     );
 
     // cyはP::zero
@@ -44,7 +44,6 @@ pub fn eval_packed_generic_addcy<P: PackedField>(
         // tは0かoverflowかのどちらか
         yield_constr.constraint(filter * t * (overflow - t));
 
-        // 繰り上がりなので、2^{-16}を掛けてから足す
         cy = t * overflow_inv;
     }
 
