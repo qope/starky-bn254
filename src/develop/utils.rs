@@ -61,6 +61,9 @@ pub fn bigint_to_columns<const N: usize>(num: &BigInt) -> [i64; N] {
     let mut output = [0i64; N];
     for (i, limb) in num.iter_u32_digits().enumerate() {
         output[2 * i] = limb as u16 as i64;
+        if (limb >> LIMB_BITS) == 0 {
+            continue;
+        }
         output[2 * i + 1] = (limb >> LIMB_BITS) as u16 as i64;
     }
     if num.sign() == Sign::Minus {

@@ -1,5 +1,4 @@
 use core::fmt;
-use core::ops::Range;
 
 use ark_bn254::Fq;
 use itertools::Itertools;
@@ -17,9 +16,6 @@ use crate::constraint_consumer::RecursiveConstraintConsumer;
 use crate::develop::utils::{
     pol_add_assign_ext_circuit, pol_adjoin_root_ext_circuit, pol_mul_wide2_ext_circuit,
 };
-use crate::lookup::{eval_lookups, eval_lookups_circuit, permuted_cols};
-use crate::permutation::PermutationPair;
-use crate::vars::{StarkEvaluationTargets, StarkEvaluationVars};
 use crate::{
     constraint_consumer::ConstraintConsumer,
     develop::utils::{
@@ -33,7 +29,7 @@ use super::utils::pol_sub_assign_ext_circuit;
 
 use crate::develop::constants::{LIMB_BITS, N_LIMBS};
 
-pub const AUX_COEFF_ABS_MAX: i64 = 1 << 22;
+pub const AUX_COEFF_ABS_MAX: i64 = 1 << 25;
 
 pub struct ModulusAux<F> {
     pub out_aux_red: [F; N_LIMBS],
@@ -69,6 +65,7 @@ pub fn generate_modular_op<F: PrimeField64>(
     };
 
     let quot_limbs = bigint_to_columns::<{ N_LIMBS + 1 }>(&quot);
+    let quot_abs_limbs = bigint_to_columns::<{ N_LIMBS + 1 }>(&quot.abs());
     // 0 <= out_aux_red < 2^256 という制約を課す(つまりout_aux_redのlimbには2^16のrange checkを課す)
     // out_aux_red = 2^256 - modulus + outputより、output < modulusが成り立つ
     let out_aux_red = bigint_to_columns::<N_LIMBS>(&(two_exp_256 - modulus + output));
@@ -97,7 +94,7 @@ pub fn generate_modular_op<F: PrimeField64>(
         .collect_vec();
 
     let output = output_limbs.map(|x| F::from_canonical_u64(x as u64));
-    let quot_abs = quot_limbs.map(|x| F::from_canonical_i64(x));
+    let quot_abs = quot_abs_limbs.map(|x| F::from_canonical_i64(x));
     let aux = ModulusAux {
         out_aux_red: out_aux_red.map(|x| F::from_canonical_i64(x)),
         quot_abs,
@@ -324,173 +321,9 @@ pub fn bn254_base_modulus_packfield<P: PackedField>() -> [P; N_LIMBS] {
     modulus_column
 }
 
-/// 1 + 6*target_cols.len()
-pub fn generate_u16_range_check<F: RichField>(
-    target_cols: Range<usize>,
-    trace_cols: &mut Vec<Vec<F>>,
-) {
-    let range_max: u64 = 1 << 8;
-    let num_rows = trace_cols[0].len() as u64;
-    assert!(trace_cols.iter().all(|col| col.len() == num_rows as usize));
-    assert!(num_rows.is_power_of_two() && range_max <= num_rows);
-
-    let mut table = vec![];
-
-    for i in 0..range_max {
-        table.push(F::from_canonical_u64(i));
-    }
-    for _ in range_max..num_rows {
-        table.push(F::from_canonical_u64(range_max - 1));
-    }
-
-    trace_cols.push(table.clone());
-
-    for i in target_cols {
-        let col = trace_cols[i].clone();
-        assert!(col.iter().all(|&x| x.to_canonical_u64() < (1 << 16)));
-
-        // split to lo and hi
-        let col_lo = col
-            .iter()
-            .map(|&x| F::from_canonical_u8(x.to_canonical_u64() as u8))
-            .collect_vec();
-        let col_hi = col
-            .iter()
-            .map(|&x| F::from_canonical_u8((x.to_canonical_u64() >> 8) as u8))
-            .collect_vec();
-
-        let (col_perm_lo, table_perm_lo) = permuted_cols(&col_lo, &table);
-        let (col_perm_hi, table_perm_hi) = permuted_cols(&col_hi, &table);
-
-        trace_cols.push(col_lo);
-        trace_cols.push(col_perm_lo);
-        trace_cols.push(table_perm_lo);
-        trace_cols.push(col_hi);
-        trace_cols.push(col_perm_hi);
-        trace_cols.push(table_perm_hi);
-    }
-}
-
-pub fn eval_u16_range_check<
-    F: Field,
-    P: PackedField<Scalar = F>,
-    const COLS: usize,
-    const PUBLIC_INPUTS: usize,
->(
-    vars: StarkEvaluationVars<F, P, COLS, PUBLIC_INPUTS>,
-    yield_constr: &mut ConstraintConsumer<P>,
-    main_col: usize,
-    target_cols: Range<usize>,
-) {
-    // split
-    for (i, col) in target_cols.clone().enumerate() {
-        let original = vars.local_values[col];
-        let lo = vars.local_values[main_col + 1 + 6 * i];
-        let hi = vars.local_values[main_col + 4 + 6 * i];
-
-        let recoverd = lo + hi * P::Scalar::from_canonical_u64(1 << 8);
-        yield_constr.constraint(original - recoverd);
-    }
-
-    // lookup
-    for i in (main_col + 1..main_col + 1 + 6 * target_cols.len()).step_by(6) {
-        eval_lookups(vars, yield_constr, i + 1, i + 2); //col_perm_lo and table_perm_lo
-        eval_lookups(vars, yield_constr, i + 4, i + 5); //col_perm_hi and table_perm_hi
-    }
-
-    // table format
-    let cur_table = vars.local_values[main_col];
-    let next_table = vars.next_values[main_col];
-    yield_constr.constraint_first_row(cur_table);
-    let incr = next_table - cur_table;
-    yield_constr.constraint_transition(incr * incr - incr);
-    let range_max = P::Scalar::from_canonical_u64(((1 << 8) - 1) as u64);
-    yield_constr.constraint_last_row(cur_table - range_max);
-}
-
-pub fn eval_u16_range_check_circuit<
-    F: RichField + Extendable<D>,
-    const D: usize,
-    const COLS: usize,
-    const PUBLIC_INPUTS: usize,
->(
-    builder: &mut CircuitBuilder<F, D>,
-    vars: StarkEvaluationTargets<D, COLS, PUBLIC_INPUTS>,
-    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
-    main_col: usize,
-    target_cols: Range<usize>,
-) {
-    let base = builder.constant_extension(F::Extension::from_canonical_u64(1u64 << 8));
-    for (i, col) in target_cols.clone().enumerate() {
-        let original = vars.local_values[col];
-        let lo = vars.local_values[main_col + 1 + 6 * i];
-        let hi = vars.local_values[main_col + 4 + 6 * i];
-        let recovered = builder.mul_add_extension(base, hi, lo);
-        let diff = builder.sub_extension(original, recovered);
-        yield_constr.constraint(builder, diff);
-    }
-
-    // lookup
-    for i in (main_col + 1..main_col + 1 + 6 * target_cols.len()).step_by(6) {
-        eval_lookups_circuit(builder, vars, yield_constr, i + 1, i + 2); //col_perm_lo and table_perm_lo
-        eval_lookups_circuit(builder, vars, yield_constr, i + 4, i + 5); //col_perm_hi and table_perm_hi
-    }
-
-    // table format
-    let cur_table = vars.local_values[main_col];
-    let next_table = vars.next_values[main_col];
-    yield_constr.constraint_first_row(builder, cur_table);
-    let incr = builder.sub_extension(next_table, cur_table);
-    let t = builder.mul_sub_extension(incr, incr, incr);
-    yield_constr.constraint_transition(builder, t);
-
-    let range_max = builder.constant_extension(F::Extension::from_canonical_usize((1 << 8) - 1));
-    let t = builder.sub_extension(cur_table, range_max);
-    yield_constr.constraint_last_row(builder, t);
-}
-
-// pub fn modular_permutation_pairs(
-//     start_lookup_col: usize,
-//     range_check_unsigned: Range<usize>,
-//     range_check_signed: Range<usize>,
-// ) -> Vec<PermutationPair> {
-//     let pairs_unsigned = range_check_unsigned
-//         .clone()
-//         .enumerate()
-//         .map(|(i, pos)| PermutationPair::singletons(pos, start_lookup_col + 1 + 2 * i))
-//         .collect_vec();
-//     let pairs_signed = range_check_signed
-//         .clone()
-//         .enumerate()
-//         .map(|(i, pos)| {
-//             PermutationPair::singletons(
-//                 pos,
-//                 start_lookup_col + 1 + 2 * range_check_unsigned.len() + 1 + 2 * i,
-//             )
-//         })
-//         .collect_vec();
-//     let pairs_unsigned_table = (0..range_check_unsigned.len())
-//         .map(|i| PermutationPair::singletons(start_lookup_col, start_lookup_col + 2 + 2 * i))
-//         .collect_vec();
-//     let pairs_signed_table = (0..range_check_signed.len())
-//         .map(|i| {
-//             PermutationPair::singletons(
-//                 start_lookup_col + 1 + 2 * range_check_unsigned.len(),
-//                 start_lookup_col + 1 + 2 * range_check_unsigned.len() + 2 + 2 * i,
-//             )
-//         })
-//         .collect_vec();
-//     let mut pairs = vec![];
-//     pairs.extend(pairs_unsigned);
-//     pairs.extend(pairs_signed);
-//     pairs.extend(pairs_unsigned_table);
-//     pairs.extend(pairs_signed_table);
-//     pairs
-// }
-
 #[cfg(test)]
 mod tests {
-    use core::{marker::PhantomData, ops::Range};
+    use core::marker::PhantomData;
 
     use ark_bn254::Fq;
     use ark_std::UniformRand;
@@ -517,17 +350,15 @@ mod tests {
         constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
         develop::{
             constants::{LIMB_BITS, N_LIMBS},
-            modular::{
-                eval_modular_op, eval_modular_op_circuit, eval_u16_range_check,
-                eval_u16_range_check_circuit,
+            modular::{eval_modular_op, eval_modular_op_circuit},
+            range_check::{
+                eval_u16_range_check, eval_u16_range_check_circuit, generate_u16_range_check,
+                u16_range_check_pairs,
             },
         },
         develop::{
             modular::{bn254_base_modulus_bigint, bn254_base_modulus_packfield},
-            utils::{
-                columns_to_bigint, pol_mul_wide, pol_mul_wide_ext_circuit, pol_sub_assign,
-                pol_sub_assign_ext_circuit,
-            },
+            utils::{columns_to_bigint, pol_mul_wide, pol_mul_wide_ext_circuit},
         },
         develop::{
             modular::{write_modulus_aux, write_u256},
@@ -544,10 +375,7 @@ mod tests {
         verifier::verify_stark_proof,
     };
 
-    use super::{
-        generate_modular_op, generate_u16_range_check, modular_constr_poly,
-        modular_constr_poly_ext_circuit, read_modulus_aux, read_u256,
-    };
+    use super::{generate_modular_op, read_modulus_aux, read_u256};
 
     const MAIN_COLS: usize = 9 * N_LIMBS + 1;
     const ROWS: usize = 512;
@@ -722,9 +550,9 @@ mod tests {
             3
         }
 
-        // fn permutation_pairs(&self) -> Vec<PermutationPair> {
-        //     modular_permutation_pairs(MAIN_COLS, RANGE_CHECK_UNSIGNED, RANGE_CHECK_SIGNED)
-        // }
+        fn permutation_pairs(&self) -> Vec<PermutationPair> {
+            u16_range_check_pairs(MAIN_COLS, START_RANGE_CHECK..END_RANGE_CHECK)
+        }
     }
 
     #[test]
