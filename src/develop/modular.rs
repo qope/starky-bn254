@@ -128,7 +128,7 @@ pub fn modular_constr_poly<P: PackedField>(
         &is_less_than,
     );
 
-    // yield_constr.constraint(filter * (quot_sign * quot_sign - P::ONES));
+    yield_constr.constraint(filter * (quot_sign * quot_sign - P::ONES));
     let quot = aux
         .quot_abs
         .iter()
@@ -183,9 +183,7 @@ pub fn modular_constr_poly_ext_circuit<F: RichField + Extendable<D>, const D: us
         &is_less_than,
     );
 
-    let quot_sign_sq = builder.mul_extension(quot_sign, quot_sign);
     let one = builder.one_extension();
-
     let diff = builder.mul_sub_extension(quot_sign, quot_sign, one);
     let t = builder.mul_extension(filter, diff);
     yield_constr.constraint(builder, t);
@@ -666,10 +664,6 @@ mod tests {
             let input0 = read_u256(&lv, &mut cur_col);
             let input1 = read_u256(&lv, &mut cur_col);
             let output = read_u256(&lv, &mut cur_col);
-
-            let modulus: [F::Extension; N_LIMBS] = bn254_base_modulus_packfield();
-            let modulus = modulus.map(|x| builder.constant_extension(x));
-
             let aux = read_modulus_aux(&lv, &mut cur_col);
 
             let quot_sign = lv[cur_col];
@@ -678,6 +672,9 @@ mod tests {
             let filter = lv[cur_col];
             cur_col += 1;
             assert!(cur_col == MAIN_COLS);
+
+            let modulus: [F::Extension; N_LIMBS] = bn254_base_modulus_packfield();
+            let modulus = modulus.map(|x| builder.constant_extension(x));
 
             let input = pol_mul_wide_ext_circuit(builder, input0, input1);
             eval_modular_op_circuit(
@@ -722,14 +719,14 @@ mod tests {
         .unwrap();
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
 
-        // let circuit_config = CircuitConfig::standard_recursion_config();
-        // let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
-        // let mut pw = PartialWitness::new();
-        // let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
-        // let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
-        // set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
-        // verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
-        // let data = builder.build::<C>();
-        // let _proof = data.prove(pw).unwrap();
+        let circuit_config = CircuitConfig::standard_recursion_config();
+        let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
+        let mut pw = PartialWitness::new();
+        let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
+        let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
+        set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
+        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
+        let data = builder.build::<C>();
+        let _proof = data.prove(pw).unwrap();
     }
 }
