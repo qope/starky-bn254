@@ -7,3 +7,4 @@ pub mod modular;
 pub mod modular_zero;
 pub mod range_check;
 pub mod utils;
+pub mod test_fibonacci;

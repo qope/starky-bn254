@@ -23,7 +23,8 @@ use crate::develop::fq12::{
     generate_fq12_modular_op, pol_mul_fq12, pol_mul_fq12_ext_circuit, read_fq12, write_fq12,
 };
 use crate::develop::range_check::{
-    eval_u16_range_check, eval_u16_range_check_circuit, generate_u16_range_check,
+    eval_u16_range_check, eval_u16_range_check_circuit, generate_split_u16_range_check,
+    generate_u16_range_check, eval_split_u16_range_check, eval_split_u16_range_check_circuit,
 };
 use crate::develop::utils::{biguint_to_bits, columns_to_fq12, fq12_to_columns};
 use crate::{
@@ -40,7 +41,7 @@ use crate::develop::modular::{
 };
 
 use super::modular::{bn254_base_modulus_packfield, eval_modular_op};
-use super::range_check::u16_range_check_pairs;
+use super::range_check::{u16_range_check_pairs, split_u16_range_check_pairs};
 
 pub fn write_instruction<F: Copy, const N: usize, const INSTRUCTION_LEN: usize>(
     lv: &mut [F; N],
@@ -120,7 +121,7 @@ const IS_MUL_COL: usize = IS_SQ_COL + 2;
 
 const MAIN_COLS: usize = IS_MUL_COL + BITS_LEN;
 
-const ROWS: usize = 1 << 16;
+const ROWS: usize = 1 << 9;
 
 #[derive(Clone, Copy)]
 pub struct Fq12ExpStark<F: RichField + Extendable<D>, const D: usize> {
@@ -280,7 +281,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
 
         let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
 
-        generate_u16_range_check(START_RANGE_CHECK..END_RANGE_CHECK, &mut trace_cols);
+        generate_split_u16_range_check(START_RANGE_CHECK..END_RANGE_CHECK, &mut trace_cols);
 
         let trace = trace_cols
             .into_iter()
@@ -292,7 +293,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<F, D> {
-    const COLUMNS: usize = MAIN_COLS + 1 + 2 * NUM_RANGE_CHECK;
+    const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECK;
     const PUBLIC_INPUTS: usize = 0;
 
     fn eval_packed_generic<FE, P, const D2: usize>(
@@ -306,21 +307,21 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         let xi: P = P::Scalar::from_canonical_u32(9).into();
         let modulus = bn254_base_modulus_packfield();
 
-        eval_u16_range_check(
+        eval_split_u16_range_check(
             vars,
             yield_constr,
             MAIN_COLS,
             START_RANGE_CHECK..END_RANGE_CHECK,
         );
 
-        let lv = vars.local_values.clone();
+        let lv = vars.local_values;
         // read x, y, z, and instruction
         let mut cur_col = 0;
         let x = read_fq12(&lv, &mut cur_col);
         let y = read_fq12(&lv, &mut cur_col);
         let z = read_fq12(&lv, &mut cur_col);
         let auxs = (0..12)
-            .map(|_| read_modulus_aux(&lv, &mut cur_col))
+            .map(|_| read_modulus_aux(lv, &mut cur_col))
             .collect_vec();
         let quot_signs = (0..12)
             .map(|_| {
@@ -367,7 +368,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         });
 
         // transition rule
-        let nv = vars.next_values.clone();
+        let nv = vars.next_values;
         cur_col = 0;
         let next_x = read_fq12(&nv, &mut cur_col);
         let next_y = read_fq12(&nv, &mut cur_col);
@@ -416,7 +417,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         let modulus = bn254_base_modulus_packfield().map(|x| builder.constant_extension(x));
         let one = builder.one_extension();
 
-        eval_u16_range_check_circuit(
+        eval_split_u16_range_check_circuit(
             builder,
             vars,
             yield_constr,
@@ -424,14 +425,14 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
             START_RANGE_CHECK..END_RANGE_CHECK,
         );
 
-        let lv = vars.local_values.clone();
+        let lv = vars.local_values;
         // read x, y, z, and instruction
         let mut cur_col = 0;
         let x = read_fq12(&lv, &mut cur_col);
         let y = read_fq12(&lv, &mut cur_col);
         let z = read_fq12(&lv, &mut cur_col);
         let auxs = (0..12)
-            .map(|_| read_modulus_aux(&lv, &mut cur_col))
+            .map(|_| read_modulus_aux(lv, &mut cur_col))
             .collect_vec();
         let quot_signs = (0..12)
             .map(|_| {
@@ -484,7 +485,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         });
 
         // transition rule
-        let nv = vars.next_values.clone();
+        let nv = vars.next_values;
         cur_col = 0;
         let next_x = read_fq12(&nv, &mut cur_col);
         let next_y = read_fq12(&nv, &mut cur_col);
@@ -535,7 +536,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
     }
 
     fn permutation_pairs(&self) -> Vec<PermutationPair> {
-        u16_range_check_pairs(MAIN_COLS, START_RANGE_CHECK..END_RANGE_CHECK)
+        split_u16_range_check_pairs(MAIN_COLS, START_RANGE_CHECK..END_RANGE_CHECK)
     }
 }
 
