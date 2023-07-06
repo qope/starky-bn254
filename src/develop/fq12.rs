@@ -15,7 +15,7 @@ use crate::{
         modular::write_u256,
         utils::{
             pol_add_assign, pol_add_assign_ext_circuit, pol_add_wide, pol_add_wide_ext_circuit,
-            pol_mul_const_ext_circuit, pol_mul_scalar, pol_mul_wide, pol_mul_wide_ext_circuit,
+            pol_mul_scalar, pol_mul_scalar_ext_circuit, pol_mul_wide, pol_mul_wide_ext_circuit,
             pol_sub_assign, pol_sub_assign_ext_circuit, pol_sub_wide, pol_sub_wide_ext_circuit,
         },
     },
@@ -133,7 +133,7 @@ pub fn pol_mul_fq12_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
     for i in 0..6 {
         if i < 5 {
             let nine_times_a0b0_minus_a1b1 =
-                pol_mul_const_ext_circuit(builder, a0b0_minus_a1b1[i + 6], xi);
+                pol_mul_scalar_ext_circuit(builder, a0b0_minus_a1b1[i + 6], xi);
             let mut coeff =
                 pol_add_wide_ext_circuit(builder, a0b0_minus_a1b1[i], nine_times_a0b0_minus_a1b1);
             pol_sub_assign_ext_circuit(builder, &mut coeff, &a0b1_plus_a1b0[i + 6]);
@@ -147,7 +147,7 @@ pub fn pol_mul_fq12_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
             let mut coeff =
                 pol_add_wide_ext_circuit(builder, a0b1_plus_a1b0[i], a0b0_minus_a1b1[i + 6]);
             let nine_times_a0b1_plus_a1b0 =
-                pol_mul_const_ext_circuit(builder, a0b1_plus_a1b0[i + 6], xi);
+                pol_mul_scalar_ext_circuit(builder, a0b1_plus_a1b0[i + 6], xi);
             pol_add_assign_ext_circuit(builder, &mut coeff, &nine_times_a0b1_plus_a1b0);
             out_coeffs.push(coeff);
         } else {

@@ -270,6 +270,19 @@ pub fn pol_sub_wide_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
     diff
 }
 
+pub fn pol_sub_normal_ext_circuit<F: RichField + Extendable<D>, const D: usize, const N: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    a: [ExtensionTarget<D>; N],
+    b: [ExtensionTarget<D>; N],
+) -> [ExtensionTarget<D>; N] {
+    let zero = builder.zero_extension();
+    let mut diff = [zero; N];
+    for i in 0..N {
+        diff[i] = builder.sub_extension(a[i], b[i]);
+    }
+    diff
+}
+
 pub fn pol_sub_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     a: [ExtensionTarget<D>; N_LIMBS],
@@ -334,7 +347,7 @@ where
     muled
 }
 
-pub fn pol_mul_const_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
+pub fn pol_mul_scalar_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     a: [ExtensionTarget<D>; 2 * N_LIMBS - 1],
     c: F::Extension,

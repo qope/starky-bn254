@@ -89,7 +89,7 @@ pub fn eval_modular_zero<P: PackedField>(
     modulus: [P; N_LIMBS],
     input: [P; 2 * N_LIMBS - 1],
     quot_sign: P,
-    aux: ModulusAuxZero<P>,
+    aux: &ModulusAuxZero<P>,
 ) {
     // validate quot_sign
     yield_constr.constraint(filter * (quot_sign * quot_sign - P::ONES));
@@ -130,7 +130,7 @@ pub fn eval_modular_zero_circuit<F: RichField + Extendable<D>, const D: usize>(
     modulus: [ExtensionTarget<D>; N_LIMBS],
     input: [ExtensionTarget<D>; 2 * N_LIMBS - 1],
     quot_sign: ExtensionTarget<D>,
-    aux: ModulusAuxZero<ExtensionTarget<D>>,
+    aux: &ModulusAuxZero<ExtensionTarget<D>>,
 ) {
     // validate quot_sign
     let one = builder.one_extension();
