@@ -39,10 +39,10 @@ pub struct ModulusAux<F> {
 }
 
 pub fn generate_modular_op<F: PrimeField64>(
-    modulus: BigInt,
+    modulus: &BigInt,
     pol_input: [i64; 2 * N_LIMBS - 1],
 ) -> ([F; N_LIMBS], F, ModulusAux<F>) {
-    let modulus_limbs = bigint_to_columns(&modulus);
+    let modulus_limbs = bigint_to_columns(modulus);
 
     let mut constr_poly = [0i64; 2 * N_LIMBS];
     constr_poly[..2 * N_LIMBS - 1].copy_from_slice(&pol_input);
@@ -51,12 +51,12 @@ pub fn generate_modular_op<F: PrimeField64>(
     two_exp_256.set_bit(256, true);
 
     let input = columns_to_bigint(&constr_poly);
-    let mut output = &input % &modulus;
+    let mut output = &input % modulus;
     if output.sign() == Sign::Minus {
-        output += &modulus;
+        output += modulus;
     }
     let output_limbs = bigint_to_columns::<N_LIMBS>(&output);
-    let quot = (&input - &output) / &modulus;
+    let quot = (&input - &output) / modulus;
 
     let quot_sign = match quot.sign() {
         Sign::Minus => F::NEG_ONE,
@@ -416,7 +416,7 @@ mod tests {
                 let pol_input = pol_mul_wide(input0_limbs, input1_limbs);
 
                 let (output, quot_sign, aux) =
-                    generate_modular_op::<F>(bn254_base_modulus_bigint(), pol_input);
+                    generate_modular_op::<F>(&bn254_base_modulus_bigint(), pol_input);
 
                 let output_actual = columns_to_bigint(&output.map(|a| a.to_canonical_u64() as i64));
                 assert!(output_expected == output_actual.to_biguint().unwrap());
