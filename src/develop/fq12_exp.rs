@@ -334,6 +334,9 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         let is_mul = lv[IS_MUL_COL];
         let is_noop = lv[IS_NOOP_COL];
 
+        // validation of first row
+        yield_constr.constraint_first_row(is_sq);
+
         // validation of instruction
         eval_bool(yield_constr, is_noop);
         yield_constr.constraint(is_sq + is_mul + is_noop - P::ONES);
@@ -442,6 +445,9 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         let is_mul = lv[IS_MUL_COL];
         let is_noop = lv[IS_NOOP_COL];
 
+        // validation of first row
+        yield_constr.constraint_first_row(builder, is_sq);
+
         // validation of instruction
         eval_bool_circuit(builder, yield_constr, is_noop);
         let sum = builder.add_many_extension([is_sq, is_mul, is_noop]);
@@ -535,6 +541,8 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use plonky2::{
         iop::witness::PartialWitness,
         plonk::{
@@ -566,6 +574,8 @@ mod tests {
         let stark = S::new();
         let trace = stark.generate_trace();
 
+        println!("start stark proof generation");
+        let now = Instant::now();
         let pi = vec![];
         let inner_proof = prove::<F, C, S, D>(
             stark,
@@ -576,6 +586,7 @@ mod tests {
         )
         .unwrap();
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
+        println!("end stark proof generation: {:?}", now.elapsed());
 
         let circuit_config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
@@ -585,6 +596,10 @@ mod tests {
         set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
         verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
         let data = builder.build::<C>();
+
+        println!("start plonky2 proof generation");
+        let now = Instant::now();
         let _proof = data.prove(pw).unwrap();
+        println!("end plonky2 proof generation: {:?}", now.elapsed());
     }
 }

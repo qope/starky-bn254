@@ -198,7 +198,6 @@ mod tests {
 
     #[test]
     fn test_recursive_stark_verifier() -> Result<()> {
-        init_logger();
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
@@ -254,9 +253,5 @@ mod tests {
         let data = builder.build::<C>();
         let proof = data.prove(pw)?;
         data.verify(proof)
-    }
-
-    fn init_logger() {
-        let _ = env_logger::builder().format_timestamp(None).try_init();
     }
 }

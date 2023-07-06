@@ -186,7 +186,7 @@ pub fn generate_fq12_modular_op<F: PrimeField64>(
     let mut auxs = vec![];
     let mut quot_signs = vec![];
     for i in 0..12 {
-        let (output, quot_sign, aux) = generate_modular_op::<F>(modulus.clone(), input[i]);
+        let (output, quot_sign, aux) = generate_modular_op::<F>(&modulus, input[i]);
         outputs.push(output);
         auxs.push(aux);
         quot_signs.push(quot_sign);

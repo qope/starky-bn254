@@ -105,6 +105,14 @@ pub fn columns_to_fq12<F: PrimeField64, const N: usize>(column: &Vec<[F; N]>) ->
     .into()
 }
 
+pub fn i64_to_column_positive<F: PrimeField64, const N: usize>(column: [i64; N]) -> [F; N] {
+    column.map(|x| F::from_canonical_u64(x as u64))
+}
+
+pub fn positive_column_to_i64<F: PrimeField64, const N: usize>(column: [F; N]) -> [i64; N] {
+    column.map(|x| x.to_canonical_u64() as i64)
+}
+
 /// A helper function to transpose a row-wise trace and put it in the format that `prove` expects.
 pub fn trace_rows_to_poly_values<F: Field, const COLUMNS: usize>(
     trace_rows: Vec<[F; COLUMNS]>,
@@ -166,6 +174,17 @@ where
     sum
 }
 
+pub fn pol_add_normal<T, const N: usize>(a: [T; N], b: [T; N]) -> [T; N]
+where
+    T: Add<Output = T> + Copy + Default,
+{
+    let mut sum = pol_zero();
+    for i in 0..N {
+        sum[i] = a[i] + b[i];
+    }
+    sum
+}
+
 pub fn pol_add_wide<T>(a: [T; 2 * N_LIMBS - 1], b: [T; 2 * N_LIMBS - 1]) -> [T; 2 * N_LIMBS - 1]
 where
     T: Add<Output = T> + Copy + Default,
@@ -211,6 +230,17 @@ where
 {
     let mut diff = pol_zero();
     for i in 0..N_LIMBS {
+        diff[i] = a[i] - b[i];
+    }
+    diff
+}
+
+pub fn pol_sub_normal<T, const N: usize>(a: [T; N], b: [T; N]) -> [T; N]
+where
+    T: Sub<Output = T> + Copy + Default,
+{
+    let mut diff = pol_zero();
+    for i in 0..N {
         diff[i] = a[i] - b[i];
     }
     diff
