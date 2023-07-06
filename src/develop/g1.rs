@@ -1,13 +1,9 @@
-use core::fmt;
 use core::marker::PhantomData;
 
-use ark_bn254::{g1, Fq, Fq12, Fr, G1Affine};
-use ark_ff::Field;
-use ark_std::{UniformRand, Zero};
+use ark_bn254::{g1, Fq, G1Affine};
+use ark_std::UniformRand;
 use itertools::Itertools;
-use num::Signed;
-use num_bigint::{BigInt, BigUint, Sign};
-use plonky2::field::types::{Field as plonky2_field, PrimeField64};
+use plonky2::field::types::Field as plonky2_field;
 use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::{
     field::{
@@ -20,20 +16,11 @@ use plonky2::{
     util::transpose,
 };
 
-use crate::develop::constants::LIMB_BITS;
-use crate::develop::fq12::{
-    generate_fq12_modular_op, pol_mul_fq12, pol_mul_fq12_ext_circuit, read_fq12, write_fq12,
-};
 use crate::develop::modular_zero::{generate_modular_zero, write_modulus_aux_zero};
-use crate::develop::range_check::{
-    eval_split_u16_range_check, eval_split_u16_range_check_circuit, eval_u16_range_check,
-    eval_u16_range_check_circuit, generate_u16_range_check,
-};
+use crate::develop::range_check::{eval_split_u16_range_check, eval_split_u16_range_check_circuit};
 use crate::develop::utils::{
-    bigint_to_columns, biguint_to_bits, columns_to_bigint, columns_to_fq, columns_to_fq12,
-    fq12_to_columns, fq_to_columns, i64_to_column_positive, pol_add, pol_add_normal, pol_mul_wide,
-    pol_mul_wide2, pol_remove_root_2exp, pol_sub, pol_sub_assign, pol_sub_normal,
-    positive_column_to_i64,
+    columns_to_fq, fq_to_columns, i64_to_column_positive, pol_add, pol_mul_wide, pol_sub,
+    pol_sub_normal, positive_column_to_i64,
 };
 use crate::{
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
@@ -46,20 +33,16 @@ use crate::{
 
 use crate::develop::modular::{
     bn254_base_modulus_bigint, eval_modular_op_circuit, generate_modular_op, read_modulus_aux,
-    write_u256, AUX_COEFF_ABS_MAX,
+    write_u256,
 };
 
 use super::modular::{bn254_base_modulus_packfield, eval_modular_op, read_u256, ModulusAux};
 use super::modular_zero::{
     eval_modular_zero, eval_modular_zero_circuit, read_modulus_aux_zero, ModulusAuxZero,
 };
-use super::range_check::{
-    generate_split_u16_range_check, split_u16_range_check_pairs, u16_range_check_pairs,
-};
+use super::range_check::{generate_split_u16_range_check, split_u16_range_check_pairs};
 use super::utils::{
-    pol_add_assign, pol_add_assign_ext_circuit, pol_add_ext_circuit, pol_adjoin_root,
-    pol_adjoin_root_ext_circuit, pol_mul_scalar, pol_mul_scalar_ext_circuit,
-    pol_mul_wide2_ext_circuit, pol_mul_wide_ext_circuit, pol_sub_assign_ext_circuit,
+    pol_add_ext_circuit, pol_mul_scalar, pol_mul_scalar_ext_circuit, pol_mul_wide_ext_circuit,
     pol_sub_ext_circuit, pol_sub_normal_ext_circuit,
 };
 
@@ -658,7 +641,7 @@ mod tests {
 
     use crate::{
         config::StarkConfig,
-        develop::{fq12_exp::Fq12ExpStark, g1::G1Stark},
+        develop::g1::G1Stark,
         prover::prove,
         recursive_verifier::{
             add_virtual_stark_proof_with_pis, set_stark_proof_with_pis_target,

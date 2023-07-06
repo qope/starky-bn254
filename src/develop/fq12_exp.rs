@@ -1,4 +1,3 @@
-use core::fmt;
 use core::marker::PhantomData;
 
 use ark_bn254::{Fq12, Fr};
@@ -22,9 +21,12 @@ use plonky2::{
 use crate::develop::fq12::{
     generate_fq12_modular_op, pol_mul_fq12, pol_mul_fq12_ext_circuit, read_fq12, write_fq12,
 };
+use crate::develop::instruction::{
+    eval_pow_instruction, eval_pow_instruction_cirucuit, generate_initial_pow_instruction,
+    generate_next_pow_instruction,
+};
 use crate::develop::range_check::{
-    eval_u16_range_check, eval_u16_range_check_circuit, generate_split_u16_range_check,
-    generate_u16_range_check, eval_split_u16_range_check, eval_split_u16_range_check_circuit,
+    eval_split_u16_range_check, eval_split_u16_range_check_circuit, generate_split_u16_range_check,
 };
 use crate::develop::utils::{biguint_to_bits, columns_to_fq12, fq12_to_columns};
 use crate::{
@@ -40,39 +42,9 @@ use crate::develop::modular::{
     bn254_base_modulus_bigint, eval_modular_op_circuit, read_modulus_aux,
 };
 
+use super::constants::BITS_LEN;
 use super::modular::{bn254_base_modulus_packfield, eval_modular_op};
-use super::range_check::{u16_range_check_pairs, split_u16_range_check_pairs};
-
-pub fn write_instruction<F: Copy, const N: usize, const INSTRUCTION_LEN: usize>(
-    lv: &mut [F; N],
-    instruction: &[F; INSTRUCTION_LEN],
-    cur_col: &mut usize,
-) {
-    lv[*cur_col..*cur_col + INSTRUCTION_LEN].copy_from_slice(instruction);
-    *cur_col += INSTRUCTION_LEN;
-}
-
-pub fn read_instruction<F: Clone + fmt::Debug, const N: usize, const INSTRUCTION_LEN: usize>(
-    lv: &[F; N],
-    cur_col: &mut usize,
-) -> [F; INSTRUCTION_LEN] {
-    let output = lv[*cur_col..*cur_col + INSTRUCTION_LEN].to_vec();
-    *cur_col += INSTRUCTION_LEN;
-    output.try_into().unwrap()
-}
-
-pub fn eval_bool<P: PackedField>(yield_constr: &mut ConstraintConsumer<P>, val: P) {
-    yield_constr.constraint(val * val - val);
-}
-
-pub fn eval_bool_circuit<F: RichField + Extendable<D>, const D: usize>(
-    builder: &mut CircuitBuilder<F, D>,
-    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
-    val: ExtensionTarget<D>,
-) {
-    let t = builder.mul_sub_extension(val, val, val);
-    yield_constr.constraint(builder, t);
-}
+use super::range_check::split_u16_range_check_pairs;
 
 pub fn fq12_equal_transition<P: PackedField>(
     yield_constr: &mut ConstraintConsumer<P>,
@@ -108,8 +80,6 @@ pub fn fq12_equal_transition_circuit<F: RichField + Extendable<D>, const D: usiz
         });
     });
 }
-
-const BITS_LEN: usize = 256;
 
 const START_RANGE_CHECK: usize = 24 * N_LIMBS;
 const NUM_RANGE_CHECK: usize = 84 * N_LIMBS - 12;
@@ -169,14 +139,13 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
         write_fq12(&mut lv, &x, &mut cur_col); //12*N_LIMBS
         write_fq12(&mut lv, &y, &mut cur_col); //12*N_LIMBS
 
-        lv[IS_SQ_COL] = F::ZERO;
-        cur_col = IS_MUL_COL;
-        write_instruction::<_, MAIN_COLS, BITS_LEN>(
+        generate_initial_pow_instruction(
             &mut lv,
-            &exp_bits.try_into().unwrap(),
-            &mut cur_col,
+            IS_SQ_COL,
+            IS_MUL_COL,
+            IS_NOOP_COL,
+            exp_bits.try_into().unwrap(),
         );
-        lv[IS_NOOP_COL] = F::ONE - lv[IS_MUL_COL];
 
         let mut rows = vec![];
 
@@ -188,9 +157,6 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
             let is_sq = lv[IS_SQ_COL];
             let is_mul = lv[IS_MUL_COL];
             let is_noop = lv[IS_NOOP_COL];
-
-            cur_col = IS_MUL_COL;
-            let mul_instruction = read_instruction::<_, MAIN_COLS, BITS_LEN>(&lv, &mut cur_col);
 
             let x_i64 = x
                 .iter()
@@ -245,30 +211,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
                 write_fq12(&mut nv, &y, &mut cur_col);
             }
             // transition rule for instruction
-            nv[IS_SQ_COL] = F::ONE - is_sq;
-            cur_col = IS_MUL_COL;
-            if is_sq == F::ONE {
-                // rotate instruction
-                let mut rotated_instruction = mul_instruction[1..].to_vec();
-                rotated_instruction.push(F::ZERO);
-                write_instruction::<_, MAIN_COLS, BITS_LEN>(
-                    &mut nv,
-                    &rotated_instruction.try_into().unwrap(),
-                    &mut cur_col,
-                );
-            } else {
-                write_instruction::<_, MAIN_COLS, BITS_LEN>(
-                    &mut nv,
-                    &mul_instruction.try_into().unwrap(),
-                    &mut cur_col,
-                );
-                // set nv[IS_MUL_COL] to 0 to ensure is_mul + is_sq + is_noop = 1
-                // this cell is never used.
-                nv[IS_MUL_COL] = F::ZERO;
-            }
-
-            nv[IS_NOOP_COL] = (F::ONE - nv[IS_MUL_COL]) * (F::ONE - nv[IS_SQ_COL]);
-
+            generate_next_pow_instruction(&lv, &mut nv, IS_SQ_COL, IS_MUL_COL, IS_NOOP_COL);
             rows.push(lv);
             lv = nv;
         }
@@ -335,13 +278,6 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         let is_mul = lv[IS_MUL_COL];
         let is_noop = lv[IS_NOOP_COL];
 
-        // validation of first row
-        yield_constr.constraint_first_row(is_sq);
-
-        // validation of instruction
-        eval_bool(yield_constr, is_noop);
-        yield_constr.constraint(is_sq + is_mul + is_noop - P::ONES);
-
         // validation of z
         let x_sq: Vec<[_; 2 * N_LIMBS - 1]> = pol_mul_fq12(x.clone(), x.clone(), xi);
         let x_mul_y: Vec<[_; 2 * N_LIMBS - 1]> = pol_mul_fq12(x.clone(), y.clone(), xi);
@@ -372,10 +308,6 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         cur_col = 0;
         let next_x = read_fq12(&nv, &mut cur_col);
         let next_y = read_fq12(&nv, &mut cur_col);
-        let next_is_sq = nv[IS_SQ_COL];
-
-        cur_col = IS_MUL_COL;
-        let next_instruction: [_; BITS_LEN] = read_instruction(&nv, &mut cur_col);
 
         // if is_sq == 1
         fq12_equal_transition(yield_constr, is_sq, &z, &next_x);
@@ -390,21 +322,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         fq12_equal_transition(yield_constr, is_noop, &y, &next_y);
 
         // transition rule for instruction
-        cur_col = IS_MUL_COL;
-        let instruction: [_; BITS_LEN] = read_instruction(&lv, &mut cur_col);
-        yield_constr.constraint_transition(next_is_sq + is_sq - P::ONES);
-
-        // if is_sq == 1, then rotate instruction
-        for i in 1..BITS_LEN {
-            yield_constr.constraint_transition(is_sq * (next_instruction[i - 1] - instruction[i]));
-        }
-        yield_constr.constraint_transition(is_sq * next_instruction[BITS_LEN - 1]);
-
-        // if is_sq == 0, then copy instruction, except for the first which is set to 0 (this does not have to be verified)
-        let not_is_sq = P::ONES - is_sq;
-        for i in 1..BITS_LEN {
-            yield_constr.constraint_transition(not_is_sq * (next_instruction[i] - instruction[i]));
-        }
+        eval_pow_instruction(yield_constr, lv, nv, IS_SQ_COL, IS_MUL_COL, IS_NOOP_COL);
     }
 
     fn eval_ext_circuit(
@@ -415,7 +333,6 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
     ) {
         let xi = F::Extension::from_canonical_u32(9);
         let modulus = bn254_base_modulus_packfield().map(|x| builder.constant_extension(x));
-        let one = builder.one_extension();
 
         eval_split_u16_range_check_circuit(
             builder,
@@ -445,15 +362,6 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         let is_sq = lv[IS_SQ_COL];
         let is_mul = lv[IS_MUL_COL];
         let is_noop = lv[IS_NOOP_COL];
-
-        // validation of first row
-        yield_constr.constraint_first_row(builder, is_sq);
-
-        // validation of instruction
-        eval_bool_circuit(builder, yield_constr, is_noop);
-        let sum = builder.add_many_extension([is_sq, is_mul, is_noop]);
-        let diff = builder.sub_extension(sum, one);
-        yield_constr.constraint(builder, diff);
 
         // validation of z
         let x_sq: Vec<[_; 2 * N_LIMBS - 1]> =
@@ -489,10 +397,6 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         cur_col = 0;
         let next_x = read_fq12(&nv, &mut cur_col);
         let next_y = read_fq12(&nv, &mut cur_col);
-        let next_is_sq = nv[IS_SQ_COL];
-
-        cur_col = IS_MUL_COL;
-        let next_instruction: [_; BITS_LEN] = read_instruction(&nv, &mut cur_col);
 
         // if is_sq == 1
         fq12_equal_transition_circuit(builder, yield_constr, is_sq, &z, &next_x);
@@ -507,28 +411,15 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         fq12_equal_transition_circuit(builder, yield_constr, is_noop, &y, &next_y);
 
         // transition rule for instruction
-        cur_col = IS_MUL_COL;
-        let instruction: [_; BITS_LEN] = read_instruction(&lv, &mut cur_col);
-        let sum = builder.add_extension(next_is_sq, is_sq);
-        let diff = builder.sub_extension(sum, one);
-        yield_constr.constraint_transition(builder, diff);
-
-        // if is_sq == 1, then rotate instruction
-        for i in 1..BITS_LEN {
-            let diff = builder.sub_extension(next_instruction[i - 1], instruction[i]);
-            let t = builder.mul_extension(is_sq, diff);
-            yield_constr.constraint_transition(builder, t);
-        }
-        let t = builder.mul_extension(is_sq, next_instruction[BITS_LEN - 1]);
-        yield_constr.constraint_transition(builder, t);
-
-        // if is_sq == 0, then copy instruction, except for the first which is set to 0 (this does not have to be verified)
-        let not_is_sq = builder.sub_extension(one, is_sq);
-        for i in 1..BITS_LEN {
-            let diff = builder.sub_extension(next_instruction[i], instruction[i]);
-            let t = builder.mul_extension(not_is_sq, diff);
-            yield_constr.constraint_transition(builder, t);
-        }
+        eval_pow_instruction_cirucuit(
+            builder,
+            yield_constr,
+            lv,
+            nv,
+            IS_SQ_COL,
+            IS_MUL_COL,
+            IS_NOOP_COL,
+        );
     }
 
     fn constraint_degree(&self) -> usize {
