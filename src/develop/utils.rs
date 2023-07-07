@@ -380,7 +380,7 @@ pub fn pol_mul_scalar_ext_circuit<F: RichField + Extendable<D>, const D: usize, 
     let c = builder.constant_extension(c);
     let zero = builder.zero_extension();
     let mut res = [zero; N];
-    for i in 0..2 * N_LIMBS - 1 {
+    for i in 0..N {
         res[i] = builder.mul_extension(a[i], c);
     }
     res

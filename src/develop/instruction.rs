@@ -197,3 +197,26 @@ pub fn fq_equal_transition_circuit<F: RichField + Extendable<D>, const D: usize>
         yield_constr.constraint_transition(builder, t);
     });
 }
+
+pub fn fq2_equal_transition<P: PackedField>(
+    yield_constr: &mut ConstraintConsumer<P>,
+    filter: P,
+    x: [[P; N_LIMBS]; 2],
+    y: [[P; N_LIMBS]; 2],
+) {
+    x.iter()
+        .zip(y.iter())
+        .for_each(|(&x_i, &y_i)| fq_equal_transition(yield_constr, filter, &x_i, &y_i));
+}
+
+pub fn fq2_equal_transition_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+    filter: ExtensionTarget<D>,
+    x: [[ExtensionTarget<D>; N_LIMBS]; 2],
+    y: [[ExtensionTarget<D>; N_LIMBS]; 2],
+) {
+    x.iter().zip(y.iter()).for_each(|(&x_i, &y_i)| {
+        fq_equal_transition_circuit(builder, yield_constr, filter, &x_i, &y_i)
+    });
+}

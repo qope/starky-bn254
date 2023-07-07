@@ -1,12 +1,18 @@
+use itertools::Itertools;
 use plonky2::{
     field::extension::Extendable, hash::hash_types::RichField, iop::ext_target::ExtensionTarget,
     plonk::circuit_builder::CircuitBuilder,
 };
 
-use crate::develop::utils::{pol_add_wide, pol_mul_wide, pol_sub_wide};
+use crate::develop::{
+    modular::write_u256,
+    utils::{pol_add_wide, pol_mul_wide, pol_sub_wide},
+};
+use core::fmt::Debug;
 
 use super::{
     constants::N_LIMBS,
+    modular::read_u256,
     utils::{
         pol_add_normal, pol_add_normal_ext_circuit, pol_add_wide_ext_circuit, pol_mul_scalar,
         pol_mul_scalar_ext_circuit, pol_mul_wide_ext_circuit, pol_sub_normal,
@@ -156,4 +162,27 @@ pub fn pol_mul_scalar_fq2_circuit<F: RichField + Extendable<D>, const D: usize, 
     let z_c0 = pol_mul_scalar_ext_circuit(builder, x_c0, c);
     let z_c1 = pol_mul_scalar_ext_circuit(builder, x_c1, c);
     [z_c0, z_c1]
+}
+
+/// 2*N_LIMBS
+pub fn write_fq2<F: Copy, const NUM_COL: usize>(
+    lv: &mut [F; NUM_COL],
+    input: [[F; N_LIMBS]; 2],
+    cur_col: &mut usize,
+) {
+    input
+        .iter()
+        .for_each(|coeff| write_u256(lv, coeff, cur_col));
+}
+
+/// 2*N_LIMBS
+pub fn read_fq2<F: Copy + Debug, const NUM_COL: usize>(
+    lv: &[F; NUM_COL],
+    cur_col: &mut usize,
+) -> [[F; N_LIMBS]; 2] {
+    (0..2)
+        .map(|_| read_u256(lv, cur_col))
+        .collect_vec()
+        .try_into()
+        .unwrap()
 }

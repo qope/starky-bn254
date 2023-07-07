@@ -2,8 +2,10 @@
 
 Starky implementation of
 
-[x] Fq12 exponentiation
+- Fq12 exponentiation
 
-[x] G1 scalar multiplication
+- G1 scalar multiplication
 
-[] G2 scalar multiplication
+- G2 scalar multiplication
+
+on BN254 curve.
