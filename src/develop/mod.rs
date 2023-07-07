@@ -3,6 +3,7 @@ pub mod constants;
 pub mod fq12;
 pub mod fq12_exp;
 pub mod g1;
+pub mod g1_exp;
 pub mod instruction;
 pub mod modular;
 pub mod modular_zero;

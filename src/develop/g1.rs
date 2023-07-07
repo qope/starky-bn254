@@ -46,6 +46,7 @@ use super::utils::{
     pol_sub_ext_circuit, pol_sub_normal_ext_circuit,
 };
 
+
 pub struct G1Output<F> {
     pub lambda: [F; N_LIMBS],
     pub new_x: [F; N_LIMBS],
@@ -56,6 +57,22 @@ pub struct G1Output<F> {
     pub quot_sign_zero: F,
     pub quot_sign_x: F,
     pub quot_sign_y: F,
+}
+
+impl<F: RichField + Default> Default for G1Output<F> {
+    fn default() -> Self {
+        Self {
+            lambda: [F::ZERO; N_LIMBS],
+            new_x: [F::ZERO; N_LIMBS],
+            new_y: [F::ZERO; N_LIMBS],
+            aux_zero: ModulusAuxZero::default(),
+            aux_x: ModulusAux::default(),
+            aux_y: ModulusAux::default(),
+            quot_sign_zero: F::ONE,
+            quot_sign_x: F::ONE,
+            quot_sign_y: F::ONE,
+        }
+    }
 }
 
 pub fn generate_g1_add<F: RichField>(

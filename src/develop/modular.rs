@@ -31,6 +31,7 @@ use crate::develop::constants::{LIMB_BITS, N_LIMBS};
 
 pub const AUX_COEFF_ABS_MAX: i64 = 1 << 29;
 
+#[derive(Default)]
 pub struct ModulusAux<F> {
     pub out_aux_red: [F; N_LIMBS],
     pub quot_abs: [F; N_LIMBS + 1],

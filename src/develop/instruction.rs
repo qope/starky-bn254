@@ -7,11 +7,9 @@ use plonky2::{
     plonk::circuit_builder::CircuitBuilder,
 };
 
-use crate::{
-    constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
-};
+use crate::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
 
-use super::constants::BITS_LEN;
+use super::constants::{BITS_LEN, N_LIMBS};
 
 pub fn write_instruction<F: Copy, const N: usize, const INSTRUCTION_LEN: usize>(
     lv: &mut [F; N],
@@ -173,4 +171,29 @@ pub fn eval_pow_instruction_cirucuit<
         let t = builder.mul_extension(not_is_sq, diff);
         yield_constr.constraint_transition(builder, t);
     }
+}
+
+pub fn fq_equal_transition<P: PackedField>(
+    yield_constr: &mut ConstraintConsumer<P>,
+    filter: P,
+    x: &[P; N_LIMBS],
+    y: &[P; N_LIMBS],
+) {
+    x.iter()
+        .zip(y.iter())
+        .for_each(|(&x_i, &y_i)| yield_constr.constraint_transition(filter * (x_i - y_i)));
+}
+
+pub fn fq_equal_transition_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+    filter: ExtensionTarget<D>,
+    x: &[ExtensionTarget<D>; N_LIMBS],
+    y: &[ExtensionTarget<D>; N_LIMBS],
+) {
+    x.iter().zip(y.iter()).for_each(|(&x_i, &y_i)| {
+        let diff = builder.sub_extension(x_i, y_i);
+        let t = builder.mul_extension(filter, diff);
+        yield_constr.constraint_transition(builder, t);
+    });
 }
