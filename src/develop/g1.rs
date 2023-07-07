@@ -46,7 +46,6 @@ use super::utils::{
     pol_sub_ext_circuit, pol_sub_normal_ext_circuit,
 };
 
-
 pub struct G1Output<F> {
     pub lambda: [F; N_LIMBS],
     pub new_x: [F; N_LIMBS],

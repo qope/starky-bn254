@@ -28,7 +28,7 @@ use super::utils::{
     pol_mul_wide2_ext_circuit, pol_sub_assign_ext_circuit,
 };
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy, Debug)]
 pub struct ModulusAuxZero<F> {
     pub quot_abs: [F; N_LIMBS + 1],
     pub aux_input_lo: [F; 2 * N_LIMBS - 1],

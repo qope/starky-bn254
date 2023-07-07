@@ -1,7 +1,7 @@
 use core::ops::*;
 
 use alloc::vec::Vec;
-use ark_bn254::{Fq, Fq12};
+use ark_bn254::{Fq, Fq12, Fq2};
 use bitvec::prelude::*;
 use itertools::Itertools;
 use num_bigint::{BigInt, BigUint, Sign};
@@ -88,10 +88,22 @@ pub fn fq12_to_columns<const N: usize>(x: Fq12) -> Vec<[i64; N]> {
         .collect()
 }
 
+pub fn fq2_to_columns(x: Fq2) -> [[i64; N_LIMBS]; 2] {
+    [x.c0, x.c1].map(|c| fq_to_columns(c.clone()))
+}
+
 pub fn columns_to_fq<F: PrimeField64, const N: usize>(column: &[F; N]) -> Fq {
     let column = column.map(|x| x.to_canonical_u64() as i64);
     let x = columns_to_bigint(&column);
     x.to_biguint().unwrap().into()
+}
+
+pub fn columns_to_fq2<F: PrimeField64>(column: [[F; N_LIMBS]; 2]) -> Fq2 {
+    let coeffs = column
+        .iter()
+        .map(|column| columns_to_fq(column))
+        .collect_vec();
+    Fq2::new(coeffs[0], coeffs[1])
 }
 
 pub fn columns_to_fq12<F: PrimeField64, const N: usize>(column: &Vec<[F; N]>) -> Fq12 {
@@ -204,6 +216,19 @@ pub fn pol_add_wide_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
     let zero = builder.zero_extension();
     let mut diff = [zero; 2 * N_LIMBS - 1];
     for i in 0..2 * N_LIMBS - 1 {
+        diff[i] = builder.add_extension(a[i], b[i]);
+    }
+    diff
+}
+
+pub fn pol_add_normal_ext_circuit<F: RichField + Extendable<D>, const D: usize, const N: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    a: [ExtensionTarget<D>; N],
+    b: [ExtensionTarget<D>; N],
+) -> [ExtensionTarget<D>; N] {
+    let zero = builder.zero_extension();
+    let mut diff = [zero; N];
+    for i in 0..N {
         diff[i] = builder.add_extension(a[i], b[i]);
     }
     diff
@@ -347,14 +372,14 @@ where
     muled
 }
 
-pub fn pol_mul_scalar_ext_circuit<F: RichField + Extendable<D>, const D: usize>(
+pub fn pol_mul_scalar_ext_circuit<F: RichField + Extendable<D>, const D: usize, const N: usize>(
     builder: &mut CircuitBuilder<F, D>,
-    a: [ExtensionTarget<D>; 2 * N_LIMBS - 1],
+    a: [ExtensionTarget<D>; N],
     c: F::Extension,
-) -> [ExtensionTarget<D>; 2 * N_LIMBS - 1] {
+) -> [ExtensionTarget<D>; N] {
     let c = builder.constant_extension(c);
     let zero = builder.zero_extension();
-    let mut res = [zero; 2 * N_LIMBS - 1];
+    let mut res = [zero; N];
     for i in 0..2 * N_LIMBS - 1 {
         res[i] = builder.mul_extension(a[i], c);
     }
