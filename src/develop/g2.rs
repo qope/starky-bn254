@@ -559,7 +559,7 @@ const START_RANGE_CHECK: usize = 8 * N_LIMBS;
 const NUM_RANGE_CHECK: usize = 40 * N_LIMBS - 6;
 const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECK;
 const IS_SQ_COL: usize = 48 * N_LIMBS;
-const IS_NOOP_COL: usize = 48 * N_LIMBS + 1;
+// const IS_NOOP_COL: usize = 48 * N_LIMBS + 1;
 const IS_MUL_COL: usize = 48 * N_LIMBS + 2;
 
 #[derive(Clone, Copy)]

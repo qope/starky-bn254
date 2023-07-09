@@ -1,7 +1,6 @@
 use core::marker::PhantomData;
 
 use ark_bn254::{Fr, G2Affine};
-use ark_std::UniformRand;
 use itertools::Itertools;
 use plonky2::{
     field::{
@@ -16,7 +15,7 @@ use plonky2::{
 
 use crate::{
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
-    develop::{g2::generate_g2_add, utils::biguint_to_bits},
+    develop::{g2::generate_g2_add, utils::bits_to_biguint},
     permutation::PermutationPair,
     stark::Stark,
     vars::{StarkEvaluationTargets, StarkEvaluationVars},
@@ -30,9 +29,10 @@ use super::{
         generate_g2_double, read_g2_output, write_g2_output, G2Output,
     },
     instruction::{
-        eval_pow_instruction, eval_pow_instruction_cirucuit, fq2_equal_transition,
+        eval_pow_instruction, eval_pow_instruction_cirucuit, fq2_equal_first,
+        fq2_equal_first_circuit, fq2_equal_last, fq2_equal_last_circuit, fq2_equal_transition,
         fq2_equal_transition_circuit, generate_initial_pow_instruction,
-        generate_next_pow_instruction,
+        generate_next_pow_instruction, read_instruction,
     },
     range_check::{
         eval_split_u16_range_check, eval_split_u16_range_check_circuit,
@@ -62,17 +62,20 @@ impl<F: RichField + Extendable<D>, const D: usize> G2ExpStark<F, D> {
         }
     }
 
-    pub fn generate_trace(&self) -> Vec<PolynomialValues<F>> {
-        let mut rng = rand::thread_rng();
-
-        let exp_val: Fr = Fr::rand(&mut rng);
-        let exp_bits: Vec<F> = biguint_to_bits(&exp_val.into(), BITS_LEN)
-            .iter()
-            .map(|&b| F::from_bool(b))
-            .collect_vec();
-        let a_g2 = G2Affine::rand(&mut rng);
-        let b_g2 = G2Affine::rand(&mut rng);
-        let x_exp_expected: G2Affine = (a_g2 * exp_val + b_g2).into();
+    pub fn generate_trace(
+        &self,
+        x: G2Affine,
+        offset: G2Affine,
+        x_exp: G2Affine,
+        exp_bits: [bool; BITS_LEN],
+    ) -> Vec<PolynomialValues<F>> {
+        let exp_val = bits_to_biguint(&exp_bits);
+        let exp_val: Fr = exp_val.into();
+        let exp_bits = exp_bits.map(|b| F::from_bool(b));
+        let a_g2 = x;
+        let b_g2 = offset;
+        let expected: G2Affine = (a_g2 * exp_val + b_g2).into();
+        assert!(expected == x_exp);
 
         let a_x: [[F; N_LIMBS]; 2] = fq2_to_columns(a_g2.x).map(i64_to_column_positive);
         let a_y: [[F; N_LIMBS]; 2] = fq2_to_columns(a_g2.y).map(i64_to_column_positive);
@@ -153,7 +156,7 @@ impl<F: RichField + Extendable<D>, const D: usize> G2ExpStark<F, D> {
         let new_x = columns_to_fq2(new_x);
         let new_y = columns_to_fq2(new_y);
         let new_g2 = G2Affine::new(new_x, new_y);
-        assert!(new_g2 == x_exp_expected);
+        assert!(new_g2 == expected);
 
         let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
 
@@ -164,11 +167,40 @@ impl<F: RichField + Extendable<D>, const D: usize> G2ExpStark<F, D> {
             .map(|column| PolynomialValues::new(column))
             .collect()
     }
+
+    pub fn generate_public_inputs(
+        x: G2Affine,
+        x_exp: G2Affine,
+        offset: G2Affine,
+        exp_bits: [bool; BITS_LEN],
+    ) -> [F; 12 * N_LIMBS + BITS_LEN] {
+        let mut pi = [F::ZERO; 12 * N_LIMBS + BITS_LEN];
+        let x_c0 = fq2_to_columns(x.x).map(i64_to_column_positive);
+        let x_c1 = fq2_to_columns(x.y).map(i64_to_column_positive);
+        let offset_c0 = fq2_to_columns(offset.x).map(i64_to_column_positive);
+        let offset_c1 = fq2_to_columns(offset.y).map(i64_to_column_positive);
+        let x_exp_c0 = fq2_to_columns(x_exp.x).map(i64_to_column_positive);
+        let x_exp_c1 = fq2_to_columns(x_exp.y).map(i64_to_column_positive);
+        let exp_bits = exp_bits.map(|b| F::from_bool(b));
+        let mut cur_col = 0;
+        write_fq2(&mut pi, x_c0, &mut cur_col);
+        write_fq2(&mut pi, x_c1, &mut cur_col);
+        write_fq2(&mut pi, offset_c0, &mut cur_col);
+        write_fq2(&mut pi, offset_c1, &mut cur_col);
+        write_fq2(&mut pi, x_exp_c0, &mut cur_col);
+        write_fq2(&mut pi, x_exp_c1, &mut cur_col);
+        for i in 0..BITS_LEN {
+            pi[cur_col] = exp_bits[i];
+            cur_col += 1;
+        }
+        assert!(cur_col == 12 * N_LIMBS + BITS_LEN);
+        pi
+    }
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2ExpStark<F, D> {
     const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECK;
-    const PUBLIC_INPUTS: usize = 0;
+    const PUBLIC_INPUTS: usize = 12 * N_LIMBS + BITS_LEN;
 
     fn eval_packed_generic<FE, P, const D2: usize>(
         &self,
@@ -196,8 +228,31 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2ExpStark<F,
         let is_add = lv[IS_MUL_COL];
         let is_double = lv[IS_SQ_COL];
         let is_noop = lv[IS_NOOP_COL];
+        cur_col = IS_MUL_COL;
+        let bits: [_; BITS_LEN] = read_instruction(lv, &mut cur_col);
         eval_g2_add(yield_constr, is_add, a_x, a_y, b_x, b_y, &output);
         eval_g2_double(yield_constr, is_double, a_x, a_y, &output);
+
+        // public inputs
+        let pi = vars.public_inputs;
+        let pi: [P; Self::PUBLIC_INPUTS] = pi.map(|x| x.into());
+        cur_col = 0;
+        let pi_a_x = read_fq2(&pi, &mut cur_col);
+        let pi_a_y = read_fq2(&pi, &mut cur_col);
+        let pi_b_x = read_fq2(&pi, &mut cur_col);
+        let pi_b_y = read_fq2(&pi, &mut cur_col);
+        let pi_final_x = read_fq2(&pi, &mut cur_col);
+        let pi_final_y = read_fq2(&pi, &mut cur_col);
+        let pi_bits: [_; BITS_LEN] = read_instruction(&pi, &mut cur_col);
+        fq2_equal_first(yield_constr, pi_a_x, a_x);
+        fq2_equal_first(yield_constr, pi_a_y, a_y);
+        fq2_equal_first(yield_constr, pi_b_x, b_x);
+        fq2_equal_first(yield_constr, pi_b_y, b_y);
+        fq2_equal_last(yield_constr, pi_final_x, b_x);
+        fq2_equal_last(yield_constr, pi_final_y, b_y);
+        for i in 0..BITS_LEN {
+            yield_constr.constraint_first_row(pi_bits[i] - bits[i]);
+        }
 
         let nv = vars.next_values;
 
@@ -253,8 +308,31 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2ExpStark<F,
         let is_add = lv[IS_MUL_COL];
         let is_double = lv[IS_SQ_COL];
         let is_noop = lv[IS_NOOP_COL];
+        cur_col = IS_MUL_COL;
+        let bits: [_; BITS_LEN] = read_instruction(lv, &mut cur_col);
         eval_g2_add_circuit(builder, yield_constr, is_add, a_x, a_y, b_x, b_y, &output);
         eval_g2_double_circuit(builder, yield_constr, is_double, a_x, a_y, &output);
+
+        // public inputs
+        let pi = vars.public_inputs;
+        cur_col = 0;
+        let pi_a_x = read_fq2(&pi, &mut cur_col);
+        let pi_a_y = read_fq2(&pi, &mut cur_col);
+        let pi_b_x = read_fq2(&pi, &mut cur_col);
+        let pi_b_y = read_fq2(&pi, &mut cur_col);
+        let pi_final_x = read_fq2(&pi, &mut cur_col);
+        let pi_final_y = read_fq2(&pi, &mut cur_col);
+        let pi_bits: [_; BITS_LEN] = read_instruction(&pi, &mut cur_col);
+        fq2_equal_first_circuit(builder, yield_constr, pi_a_x, a_x);
+        fq2_equal_first_circuit(builder, yield_constr, pi_a_y, a_y);
+        fq2_equal_first_circuit(builder, yield_constr, pi_b_x, b_x);
+        fq2_equal_first_circuit(builder, yield_constr, pi_b_y, b_y);
+        fq2_equal_last_circuit(builder, yield_constr, pi_final_x, b_x);
+        fq2_equal_last_circuit(builder, yield_constr, pi_final_y, b_y);
+        for i in 0..BITS_LEN {
+            let diff = builder.sub_extension(pi_bits[i], bits[i]);
+            yield_constr.constraint_first_row(builder, diff);
+        }
 
         let nv = vars.next_values;
 
@@ -306,6 +384,8 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2ExpStark<F,
 mod tests {
     use std::time::Instant;
 
+    use ark_bn254::{Fr, G2Affine};
+    use ark_std::UniformRand;
     use plonky2::{
         iop::witness::PartialWitness,
         plonk::{
@@ -318,7 +398,7 @@ mod tests {
 
     use crate::{
         config::StarkConfig,
-        develop::g2_exp::G2ExpStark,
+        develop::{constants::BITS_LEN, g2_exp::G2ExpStark, utils::biguint_to_bits},
         prover::prove,
         recursive_verifier::{
             add_virtual_stark_proof_with_pis, set_stark_proof_with_pis_target,
@@ -329,25 +409,29 @@ mod tests {
 
     #[test]
     fn test_g2_exp() {
+        let mut rng = rand::thread_rng();
+        let exp_val: Fr = Fr::rand(&mut rng);
+        let exp_bits: [bool; BITS_LEN] = biguint_to_bits(&exp_val.into(), BITS_LEN)
+            .try_into()
+            .unwrap();
+        let x = G2Affine::rand(&mut rng);
+        let offset = G2Affine::rand(&mut rng);
+        let x_exp: G2Affine = (x * exp_val + offset).into();
+
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
         type S = G2ExpStark<F, D>;
         let inner_config = StarkConfig::standard_fast_config();
         let stark = S::new();
-        let trace = stark.generate_trace();
+        let trace = stark.generate_trace(x, offset, x_exp, exp_bits);
 
         println!("start stark proof generation");
         let now = Instant::now();
-        let pi = vec![];
-        let inner_proof = prove::<F, C, S, D>(
-            stark,
-            &inner_config,
-            trace,
-            pi.try_into().unwrap(),
-            &mut TimingTree::default(),
-        )
-        .unwrap();
+        let pi = S::generate_public_inputs(x, x_exp, offset, exp_bits);
+        let inner_proof =
+            prove::<F, C, S, D>(stark, &inner_config, trace, pi, &mut TimingTree::default())
+                .unwrap();
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
         println!("end stark proof generation: {:?}", now.elapsed());
 

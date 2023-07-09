@@ -29,6 +29,20 @@ pub fn biguint_to_bits(x: &BigUint, len: usize) -> Vec<bool> {
     bits
 }
 
+pub fn bits_to_biguint(bits: &[bool]) -> BigUint {
+    let mut limbs = vec![];
+    for chunk in bits.chunks(8) {
+        let mut limb = 0u8;
+        for (i, bit) in chunk.iter().enumerate() {
+            if *bit {
+                limb |= 1 << i;
+            }
+        }
+        limbs.push(limb);
+    }
+    BigUint::from_bytes_le(&limbs)
+}
+
 pub fn columns_to_bigint<const N: usize>(limbs: &[i64; N]) -> BigInt {
     const BASE: i64 = 1i64 << LIMB_BITS;
 
@@ -74,12 +88,12 @@ pub fn bigint_to_columns<const N: usize>(num: &BigInt) -> [i64; N] {
     output
 }
 
-pub fn fq_to_columns<const N: usize>(x: Fq) -> [i64; N] {
+pub fn fq_to_columns(x: Fq) -> [i64; N_LIMBS] {
     let x_biguint: BigUint = x.into();
     bigint_to_columns(&x_biguint.into())
 }
 
-pub fn fq12_to_columns<const N: usize>(x: Fq12) -> Vec<[i64; N]> {
+pub fn fq12_to_columns(x: Fq12) -> Vec<[i64; N_LIMBS]> {
     let x_myfq12: MyFq12 = x.into();
     x_myfq12
         .coeffs
