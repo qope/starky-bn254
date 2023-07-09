@@ -1,5 +1,6 @@
 use core::marker::PhantomData;
 
+use alloc::vec;
 use ark_bn254::{Fq12, Fr};
 use ark_ff::Field;
 use itertools::Itertools;
@@ -22,7 +23,7 @@ use crate::develop::fq12::{
 };
 use crate::develop::instruction::{
     eval_pow_instruction, eval_pow_instruction_cirucuit, fq12_equal_first,
-    fq12_equal_first_circuit, fq12_equal_last, fq12_equal_last_circuit, fq2_equal_last,
+    fq12_equal_first_circuit, fq12_equal_last, fq12_equal_last_circuit,
     generate_initial_pow_instruction, generate_next_pow_instruction, read_instruction,
 };
 use crate::develop::range_check::{
@@ -334,6 +335,11 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
             )
         });
 
+        // initial condition
+        let mut one = vec![[P::ZEROS; N_LIMBS]; 12];
+        one[0][0] = P::ONES;
+        fq12_equal_first(yield_constr, &y, &one);
+
         // public inputs
         let pi = vars.public_inputs;
         let pi: [P; Self::PUBLIC_INPUTS] = pi.map(|x| x.into());
@@ -438,6 +444,12 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
             )
         });
 
+        // initial condition
+        let zero = builder.zero_extension();
+        let mut one = vec![[zero; N_LIMBS]; 12];
+        one[0][0] = builder.one_extension();
+        fq12_equal_first_circuit(builder, yield_constr, &y, &one);
+
         // public inputs
         let pi = vars.public_inputs;
         cur_col = 0;
@@ -541,14 +553,9 @@ mod tests {
         println!("start stark proof generation");
         let now = Instant::now();
         let pi = S::generate_public_inputs(x, x_exp, exp_bits);
-        let inner_proof = prove::<F, C, S, D>(
-            stark,
-            &inner_config,
-            trace,
-            pi,
-            &mut TimingTree::default(),
-        )
-        .unwrap();
+        let inner_proof =
+            prove::<F, C, S, D>(stark, &inner_config, trace, pi, &mut TimingTree::default())
+                .unwrap();
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
         println!("end stark proof generation: {:?}", now.elapsed());
 
