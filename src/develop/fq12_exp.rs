@@ -2,7 +2,6 @@ use core::marker::PhantomData;
 
 use ark_bn254::{Fq12, Fr};
 use ark_ff::Field;
-use ark_std::UniformRand;
 use itertools::Itertools;
 use num_bigint::BigUint;
 use plonky2::field::types::Field as plonky2_field;
@@ -22,13 +21,16 @@ use crate::develop::fq12::{
     generate_fq12_modular_op, pol_mul_fq12, pol_mul_fq12_ext_circuit, read_fq12, write_fq12,
 };
 use crate::develop::instruction::{
-    eval_pow_instruction, eval_pow_instruction_cirucuit, generate_initial_pow_instruction,
-    generate_next_pow_instruction,
+    eval_pow_instruction, eval_pow_instruction_cirucuit, fq12_equal_first,
+    fq12_equal_first_circuit, fq12_equal_last, fq12_equal_last_circuit, fq2_equal_last,
+    generate_initial_pow_instruction, generate_next_pow_instruction, read_instruction,
 };
 use crate::develop::range_check::{
     eval_split_u16_range_check, eval_split_u16_range_check_circuit, generate_split_u16_range_check,
 };
-use crate::develop::utils::{biguint_to_bits, columns_to_fq12, fq12_to_columns};
+use crate::develop::utils::{
+    bits_to_biguint, columns_to_fq12, fq12_to_columns, i64_to_column_positive,
+};
 use crate::{
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
     develop::constants::N_LIMBS,
@@ -105,22 +107,23 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
         }
     }
 
-    pub fn generate_trace(&self) -> Vec<PolynomialValues<F>> {
-        let mut rng = rand::thread_rng();
-
+    pub fn generate_trace(
+        &self,
+        x: Fq12,
+        x_exp: Fq12,
+        exp_bits: [bool; BITS_LEN],
+    ) -> Vec<PolynomialValues<F>> {
         let modulus = bn254_base_modulus_bigint();
         let xi = 9;
 
-        let exp_val: Fr = Fr::rand(&mut rng);
-        let exp_bits: Vec<F> = biguint_to_bits(&exp_val.into(), BITS_LEN)
-            .iter()
-            .map(|&b| F::from_bool(b))
-            .collect_vec();
-        assert!(exp_bits.len() == BITS_LEN);
+        let exp_val = bits_to_biguint(&exp_bits);
+        let exp_val: Fr = exp_val.into();
+        let exp_bits = exp_bits.map(|b| F::from_bool(b));
 
-        let x_input = Fq12::rand(&mut rng);
+        let x_input = x;
         let exp_val_biguint: BigUint = exp_val.into();
         let x_exp_expected: Fq12 = x_input.pow(&exp_val_biguint.to_u64_digits());
+        assert!(x_exp_expected == x_exp);
 
         let x_i64 = fq12_to_columns(x_input);
         let y_i64 = fq12_to_columns(Fq12::ONE);
@@ -233,11 +236,37 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
 
         trace
     }
+
+    pub fn generate_public_inputs(
+        x: Fq12,
+        x_exp: Fq12,
+        exp_bits: [bool; BITS_LEN],
+    ) -> [F; 24 * N_LIMBS + BITS_LEN] {
+        let mut pi = [F::ZERO; 24 * N_LIMBS + BITS_LEN];
+        let x = fq12_to_columns(x)
+            .iter()
+            .map(|x| i64_to_column_positive(*x))
+            .collect_vec();
+        let x_exp = fq12_to_columns(x_exp)
+            .iter()
+            .map(|x| i64_to_column_positive(*x))
+            .collect_vec();
+        let exp_bits = exp_bits.map(|b| F::from_bool(b));
+        let mut cur_col = 0;
+        write_fq12(&mut pi, &x, &mut cur_col);
+        write_fq12(&mut pi, &x_exp, &mut cur_col);
+        for i in 0..BITS_LEN {
+            pi[cur_col] = exp_bits[i];
+            cur_col += 1;
+        }
+        assert!(cur_col == 24 * N_LIMBS + BITS_LEN);
+        pi
+    }
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<F, D> {
     const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECK;
-    const PUBLIC_INPUTS: usize = 0;
+    const PUBLIC_INPUTS: usize = 24 * N_LIMBS + BITS_LEN;
 
     fn eval_packed_generic<FE, P, const D2: usize>(
         &self,
@@ -277,6 +306,8 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         let is_sq = lv[IS_SQ_COL];
         let is_mul = lv[IS_MUL_COL];
         let is_noop = lv[IS_NOOP_COL];
+        cur_col = IS_MUL_COL;
+        let bits: [_; BITS_LEN] = read_instruction(lv, &mut cur_col);
 
         // validation of z
         let x_sq: Vec<[_; 2 * N_LIMBS - 1]> = pol_mul_fq12(x.clone(), x.clone(), xi);
@@ -302,6 +333,19 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
                 &auxs[i],
             )
         });
+
+        // public inputs
+        let pi = vars.public_inputs;
+        let pi: [P; Self::PUBLIC_INPUTS] = pi.map(|x| x.into());
+        cur_col = 0;
+        let pi_x = read_fq12(&pi, &mut cur_col);
+        let pi_x_exp = read_fq12(&pi, &mut cur_col);
+        let pi_bits: [_; BITS_LEN] = read_instruction(&pi, &mut cur_col);
+        fq12_equal_first(yield_constr, &pi_x, &x);
+        fq12_equal_last(yield_constr, &pi_x_exp, &y);
+        for i in 0..BITS_LEN {
+            yield_constr.constraint_first_row(pi_bits[i] - bits[i]);
+        }
 
         // transition rule
         let nv = vars.next_values;
@@ -362,6 +406,8 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         let is_sq = lv[IS_SQ_COL];
         let is_mul = lv[IS_MUL_COL];
         let is_noop = lv[IS_NOOP_COL];
+        cur_col = IS_MUL_COL;
+        let bits: [_; BITS_LEN] = read_instruction(lv, &mut cur_col);
 
         // validation of z
         let x_sq: Vec<[_; 2 * N_LIMBS - 1]> =
@@ -391,6 +437,19 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
                 &auxs[i],
             )
         });
+
+        // public inputs
+        let pi = vars.public_inputs;
+        cur_col = 0;
+        let pi_x = read_fq12(&pi, &mut cur_col);
+        let pi_x_exp = read_fq12(&pi, &mut cur_col);
+        let pi_bits: [_; BITS_LEN] = read_instruction(&pi, &mut cur_col);
+        fq12_equal_first_circuit(builder, yield_constr, &pi_x, &x);
+        fq12_equal_last_circuit(builder, yield_constr, &pi_x_exp, &y);
+        for i in 0..BITS_LEN {
+            let diff = builder.sub_extension(pi_bits[i], bits[i]);
+            yield_constr.constraint_first_row(builder, diff);
+        }
 
         // transition rule
         let nv = vars.next_values;
@@ -435,6 +494,10 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
 mod tests {
     use std::time::Instant;
 
+    use ark_bn254::{Fq12, Fr};
+    use ark_ff::Field;
+    use ark_std::UniformRand;
+    use num_bigint::BigUint;
     use plonky2::{
         iop::witness::PartialWitness,
         plonk::{
@@ -447,7 +510,7 @@ mod tests {
 
     use crate::{
         config::StarkConfig,
-        develop::fq12_exp::Fq12ExpStark,
+        develop::{constants::BITS_LEN, fq12_exp::Fq12ExpStark, utils::biguint_to_bits},
         prover::prove,
         recursive_verifier::{
             add_virtual_stark_proof_with_pis, set_stark_proof_with_pis_target,
@@ -458,17 +521,26 @@ mod tests {
 
     #[test]
     fn test_fq12_exp() {
+        let mut rng = rand::thread_rng();
+        let exp_val: Fr = Fr::rand(&mut rng);
+        let exp_bits: [bool; BITS_LEN] = biguint_to_bits(&exp_val.into(), BITS_LEN)
+            .try_into()
+            .unwrap();
+        let x = Fq12::rand(&mut rng);
+        let exp_val_biguint: BigUint = exp_val.into();
+        let x_exp = x.pow(&exp_val_biguint.to_u64_digits());
+
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
         type S = Fq12ExpStark<F, D>;
         let inner_config = StarkConfig::standard_fast_config();
         let stark = S::new();
-        let trace = stark.generate_trace();
+        let trace = stark.generate_trace(x, x_exp, exp_bits);
 
         println!("start stark proof generation");
         let now = Instant::now();
-        let pi = vec![];
+        let pi = S::generate_public_inputs(x, x_exp, exp_bits);
         let inner_proof = prove::<F, C, S, D>(
             stark,
             &inner_config,

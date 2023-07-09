@@ -306,3 +306,49 @@ pub fn fq2_equal_last_circuit<F: RichField + Extendable<D>, const D: usize>(
         .zip(y.iter())
         .for_each(|(&x_i, &y_i)| fq_equal_last_circuit(builder, yield_constr, x_i, y_i));
 }
+
+pub fn fq12_equal_first<P: PackedField>(
+    yield_constr: &mut ConstraintConsumer<P>,
+    x: &Vec<[P; N_LIMBS]>,
+    y: &Vec<[P; N_LIMBS]>,
+) {
+    assert!(x.len() == 12);
+    assert!(y.len() == 12);
+    x.iter()
+        .zip(y.iter())
+        .for_each(|(&x_i, &y_i)| fq_equal_first(yield_constr, x_i, y_i));
+}
+
+pub fn fq12_equal_first_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+    x: &Vec<[ExtensionTarget<D>; N_LIMBS]>,
+    y: &Vec<[ExtensionTarget<D>; N_LIMBS]>,
+) {
+    x.iter()
+        .zip(y.iter())
+        .for_each(|(&x_i, &y_i)| fq_equal_first_circuit(builder, yield_constr, x_i, y_i));
+}
+
+pub fn fq12_equal_last<P: PackedField>(
+    yield_constr: &mut ConstraintConsumer<P>,
+    x: &Vec<[P; N_LIMBS]>,
+    y: &Vec<[P; N_LIMBS]>,
+) {
+    assert!(x.len() == 12);
+    assert!(y.len() == 12);
+    x.iter()
+        .zip(y.iter())
+        .for_each(|(&x_i, &y_i)| fq_equal_last(yield_constr, x_i, y_i));
+}
+
+pub fn fq12_equal_last_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+    x: &Vec<[ExtensionTarget<D>; N_LIMBS]>,
+    y: &Vec<[ExtensionTarget<D>; N_LIMBS]>,
+) {
+    x.iter()
+        .zip(y.iter())
+        .for_each(|(&x_i, &y_i)| fq_equal_last_circuit(builder, yield_constr, x_i, y_i));
+}
