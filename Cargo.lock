@@ -690,7 +690,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "starky"
+name = "starky-bn254"
 version = "0.1.1"
 dependencies = [
  "anyhow",

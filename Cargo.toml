@@ -1,9 +1,7 @@
 [package]
-name = "starky"
-description = "Implementation of STARKs"
+name = "starky-bn254"
 version = "0.1.1"
 license = "MIT OR Apache-2.0"
-authors = ["qope", "Daniel Lubarov <daniel@lubarov.com>", "William Borgeaud <williamborgeaud@gmail.com>"]
 readme = "README.md"
 edition = "2021"
 
