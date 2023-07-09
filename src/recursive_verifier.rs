@@ -33,7 +33,7 @@ pub fn verify_stark_proof_circuit<
 >(
     builder: &mut CircuitBuilder<F, D>,
     stark: S,
-    proof_with_pis: StarkProofWithPublicInputsTarget<D>,
+    proof_with_pis: &StarkProofWithPublicInputsTarget<D>,
     inner_config: &StarkConfig,
 ) where
     C::Hasher: AlgebraicHasher<F>,
@@ -67,7 +67,7 @@ fn verify_stark_proof_with_challenges_circuit<
 >(
     builder: &mut CircuitBuilder<F, D>,
     stark: S,
-    proof_with_pis: StarkProofWithPublicInputsTarget<D>,
+    proof_with_pis: &StarkProofWithPublicInputsTarget<D>,
     challenges: StarkProofChallengesTarget<D>,
     inner_config: &StarkConfig,
     degree_bits: usize,
@@ -96,7 +96,7 @@ fn verify_stark_proof_with_challenges_circuit<
             next_values: &next_values.to_vec().try_into().unwrap(),
             public_inputs: &public_inputs
                 .into_iter()
-                .map(|t| builder.convert_to_ext(t))
+                .map(|&t| builder.convert_to_ext(t))
                 .collect::<Vec<_>>()
                 .try_into()
                 .unwrap(),
@@ -151,9 +151,9 @@ fn verify_stark_proof_with_challenges_circuit<
         builder.connect_extension(vanishing_polys_zeta[i], computed_vanishing_poly);
     }
 
-    let merkle_caps = once(proof.trace_cap)
-        .chain(proof.permutation_zs_cap)
-        .chain(once(proof.quotient_polys_cap))
+    let merkle_caps = once(proof.trace_cap.clone())
+        .chain(proof.permutation_zs_cap.clone())
+        .chain(once(proof.quotient_polys_cap.clone()))
         .collect_vec();
 
     let fri_instance = stark.fri_instance_target(
