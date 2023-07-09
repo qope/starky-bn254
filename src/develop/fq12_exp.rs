@@ -545,7 +545,7 @@ mod tests {
             stark,
             &inner_config,
             trace,
-            pi.try_into().unwrap(),
+            pi,
             &mut TimingTree::default(),
         )
         .unwrap();
