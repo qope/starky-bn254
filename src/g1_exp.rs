@@ -13,36 +13,35 @@ use plonky2::{
     util::transpose,
 };
 
-use crate::develop::instruction::{
+use crate::instruction::{
     eval_pow_instruction, eval_pow_instruction_cirucuit, fq_equal_first, fq_equal_first_circuit,
     fq_equal_last, fq_equal_last_circuit, fq_equal_transition, fq_equal_transition_circuit,
     generate_initial_pow_instruction, generate_next_pow_instruction,
 };
-use crate::develop::modular_zero::write_modulus_aux_zero;
-use crate::develop::range_check::{eval_split_u16_range_check, eval_split_u16_range_check_circuit};
-use crate::develop::utils::{columns_to_fq, fq_to_columns};
-use crate::develop::{constants::BITS_LEN, utils::bits_to_biguint};
-use crate::develop::{
+use crate::modular::write_modulus_aux;
+use crate::modular_zero::write_modulus_aux_zero;
+use crate::range_check::{eval_split_u16_range_check, eval_split_u16_range_check_circuit};
+use crate::utils::{columns_to_fq, fq_to_columns};
+use crate::{constants::BITS_LEN, constants::N_LIMBS, utils::bits_to_biguint};
+use crate::{
     g1::{
         eval_g1_add, eval_g1_add_circuit, eval_g1_double, eval_g1_double_circuit, generate_g1_add,
         generate_g1_double, G1Output,
     },
     instruction::read_instruction,
 };
-use crate::{
+
+use starky::{
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
-    develop::constants::N_LIMBS,
-    develop::modular::write_modulus_aux,
     permutation::PermutationPair,
     stark::Stark,
     vars::{StarkEvaluationTargets, StarkEvaluationVars},
 };
 
-use crate::develop::modular::{read_modulus_aux, write_u256};
-
 use super::modular_zero::read_modulus_aux_zero;
 use super::range_check::{generate_split_u16_range_check, split_u16_range_check_pairs};
 use super::{modular::read_u256, utils::i64_to_column_positive};
+use crate::modular::{read_modulus_aux, write_u256};
 
 const MAIN_COLS: usize = 24 * N_LIMBS + 2 + BITS_LEN;
 const ROWS: usize = 1 << 9;
@@ -54,6 +53,9 @@ const IS_MUL_COL: usize = 24 * N_LIMBS + 2;
 const START_RANGE_CHECK: usize = 4 * N_LIMBS;
 const NUM_RANGE_CHECKS: usize = 20 * N_LIMBS - 4;
 const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECKS;
+
+const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECKS;
+const PUBLIC_INPUTS: usize = 6 * N_LIMBS + BITS_LEN;
 
 #[derive(Clone, Copy)]
 pub struct G1ExpStark<F: RichField + Extendable<D>, const D: usize> {
@@ -218,12 +220,12 @@ impl<F: RichField + Extendable<D>, const D: usize> G1ExpStark<F, D> {
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F, D> {
-    const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECKS;
-    const PUBLIC_INPUTS: usize = 6 * N_LIMBS + BITS_LEN;
+    const COLUMNS: usize = COLUMNS;
+    const PUBLIC_INPUTS: usize = PUBLIC_INPUTS;
 
     fn eval_packed_generic<FE, P, const D2: usize>(
         &self,
-        vars: StarkEvaluationVars<FE, P, { Self::COLUMNS }, { Self::PUBLIC_INPUTS }>,
+        vars: StarkEvaluationVars<FE, P, COLUMNS, PUBLIC_INPUTS>,
         yield_constr: &mut ConstraintConsumer<P>,
     ) where
         FE: FieldExtension<D2, BaseField = F>,
@@ -283,7 +285,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F,
 
         // public inputs
         let pi = vars.public_inputs;
-        let pi: [P; Self::PUBLIC_INPUTS] = pi.map(|x| x.into());
+        let pi: [P; PUBLIC_INPUTS] = pi.map(|x| x.into());
         cur_col = 0;
         let pi_a_x = read_u256(&pi, &mut cur_col);
         let pi_a_y = read_u256(&pi, &mut cur_col);
@@ -332,7 +334,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F,
     fn eval_ext_circuit(
         &self,
         builder: &mut CircuitBuilder<F, D>,
-        vars: StarkEvaluationTargets<D, { Self::COLUMNS }, { Self::PUBLIC_INPUTS }>,
+        vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
         yield_constr: &mut RecursiveConstraintConsumer<F, D>,
     ) {
         eval_split_u16_range_check_circuit(
@@ -457,18 +459,9 @@ mod tests {
     use std::time::Instant;
 
     use crate::{
-        config::StarkConfig,
-        develop::{
-            constants::BITS_LEN,
-            g1_exp::G1ExpStark,
-            utils::{biguint_to_bits, bits_to_biguint},
-        },
-        prover::prove,
-        recursive_verifier::{
-            add_virtual_stark_proof_with_pis, set_stark_proof_with_pis_target,
-            verify_stark_proof_circuit,
-        },
-        verifier::verify_stark_proof,
+        constants::BITS_LEN,
+        g1_exp::G1ExpStark,
+        utils::{biguint_to_bits, bits_to_biguint},
     };
     use ark_bn254::{Fr, G1Affine};
     use ark_std::UniformRand;
@@ -480,6 +473,15 @@ mod tests {
             config::{GenericConfig, PoseidonGoldilocksConfig},
         },
         util::timing::TimingTree,
+    };
+    use starky::{
+        config::StarkConfig,
+        prover::prove,
+        recursive_verifier::{
+            add_virtual_stark_proof_with_pis, set_stark_proof_with_pis_target,
+            verify_stark_proof_circuit,
+        },
+        verifier::verify_stark_proof,
     };
 
     #[test]
@@ -532,7 +534,7 @@ mod tests {
         let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
         let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
         set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
-        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, &pt, &inner_config);
+        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
         let data = builder.build::<C>();
 
         println!("start plonky2 proof generation");

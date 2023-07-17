@@ -1,6 +1,5 @@
 use core::ops::*;
 
-use alloc::vec::Vec;
 use ark_bn254::{Fq, Fq12, Fq2};
 use bitvec::prelude::*;
 use itertools::Itertools;
@@ -13,7 +12,7 @@ use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::util::transpose;
 
-use crate::develop::constants::{LIMB_BITS, N_LIMBS};
+use crate::constants::{LIMB_BITS, N_LIMBS};
 use crate::native::MyFq12;
 
 pub fn biguint_to_bits(x: &BigUint, len: usize) -> Vec<bool> {

@@ -13,14 +13,14 @@ use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::util::transpose;
 
-use crate::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
-use crate::develop::constants::N_LIMBS;
-use crate::develop::fq2::{read_fq2, write_fq2};
-use crate::develop::modular::{read_modulus_aux, ModulusAux};
-use crate::develop::modular_zero::{read_modulus_aux_zero, write_modulus_aux_zero, ModulusAuxZero};
-use crate::permutation::PermutationPair;
-use crate::stark::Stark;
-use crate::vars::{StarkEvaluationTargets, StarkEvaluationVars};
+use crate::constants::N_LIMBS;
+use crate::fq2::{read_fq2, write_fq2};
+use crate::modular::{read_modulus_aux, ModulusAux};
+use crate::modular_zero::{read_modulus_aux_zero, write_modulus_aux_zero, ModulusAuxZero};
+use starky::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
+use starky::permutation::PermutationPair;
+use starky::stark::Stark;
+use starky::vars::{StarkEvaluationTargets, StarkEvaluationVars};
 
 use super::constants::BITS_LEN;
 use super::fq2::{
@@ -562,6 +562,9 @@ const IS_SQ_COL: usize = 48 * N_LIMBS;
 // const IS_NOOP_COL: usize = 48 * N_LIMBS + 1;
 const IS_MUL_COL: usize = 48 * N_LIMBS + 2;
 
+const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECK;
+const PUBLIC_INPUTS: usize = 0;
+
 #[derive(Clone, Copy)]
 pub struct G2Stark<F: RichField + Extendable<D>, const D: usize> {
     _phantom: PhantomData<F>,
@@ -634,12 +637,12 @@ impl<F: RichField + Extendable<D>, const D: usize> G2Stark<F, D> {
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2Stark<F, D> {
-    const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECK;
-    const PUBLIC_INPUTS: usize = 0;
+    const COLUMNS: usize = COLUMNS;
+    const PUBLIC_INPUTS: usize = PUBLIC_INPUTS;
 
     fn eval_packed_generic<FE, P, const D2: usize>(
         &self,
-        vars: StarkEvaluationVars<FE, P, { Self::COLUMNS }, { Self::PUBLIC_INPUTS }>,
+        vars: StarkEvaluationVars<FE, P, COLUMNS, PUBLIC_INPUTS>,
         yield_constr: &mut ConstraintConsumer<P>,
     ) where
         FE: FieldExtension<D2, BaseField = F>,
@@ -670,7 +673,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2Stark<F, D>
     fn eval_ext_circuit(
         &self,
         builder: &mut CircuitBuilder<F, D>,
-        vars: StarkEvaluationTargets<D, { Self::COLUMNS }, { Self::PUBLIC_INPUTS }>,
+        vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
         yield_constr: &mut RecursiveConstraintConsumer<F, D>,
     ) {
         eval_split_u16_range_check_circuit(
@@ -718,9 +721,9 @@ mod tests {
         util::timing::TimingTree,
     };
 
-    use crate::{
+    use crate::g2::G2Stark;
+    use starky::{
         config::StarkConfig,
-        develop::g2::G2Stark,
         prover::prove,
         recursive_verifier::{
             add_virtual_stark_proof_with_pis, set_stark_proof_with_pis_target,
@@ -759,7 +762,7 @@ mod tests {
         let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
         let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
         set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
-        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, &pt, &inner_config);
+        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
         let data = builder.build::<C>();
 
         println!("start plonky2 proof generation");

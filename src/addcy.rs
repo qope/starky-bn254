@@ -6,10 +6,8 @@ use plonky2::hash::hash_types::RichField;
 use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 
-use crate::{
-    constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
-    develop::constants::{LIMB_BITS, N_LIMBS},
-};
+use crate::constants::{LIMB_BITS, N_LIMBS};
+use starky::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
 
 /// 2^-8 mod (2^64 - 2^32 + 1)
 const GOLDILOCKS_INVERSE_65536: u64 = 18446462594437939201;
@@ -17,7 +15,7 @@ const GOLDILOCKS_INVERSE_65536: u64 = 18446462594437939201;
 // 繰り上げの足し算を行う
 pub fn eval_packed_generic_addcy<P: PackedField>(
     yield_constr: &mut ConstraintConsumer<P>,
-    filter: P,  
+    filter: P,
     x: &[P],
     y: &[P],
     z: &[P],

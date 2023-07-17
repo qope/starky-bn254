@@ -12,16 +12,13 @@ use plonky2::{
 };
 
 use crate::{
-    constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
-    develop::{
-        constants::{LIMB_BITS, N_LIMBS},
-        modular::AUX_COEFF_ABS_MAX,
-        utils::{
-            bigint_to_columns, columns_to_bigint, pol_mul_wide2, pol_remove_root_2exp,
-            pol_sub_assign,
-        },
+    constants::{LIMB_BITS, N_LIMBS},
+    modular::AUX_COEFF_ABS_MAX,
+    utils::{
+        bigint_to_columns, columns_to_bigint, pol_mul_wide2, pol_remove_root_2exp, pol_sub_assign,
     },
 };
+use starky::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
 
 use super::utils::{
     pol_add_assign, pol_add_assign_ext_circuit, pol_adjoin_root, pol_adjoin_root_ext_circuit,

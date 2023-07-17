@@ -12,22 +12,20 @@ use plonky2::{
     hash::hash_types::RichField,
 };
 
-use crate::constraint_consumer::RecursiveConstraintConsumer;
-use crate::develop::utils::{
+use crate::utils::{
+    bigint_to_columns, columns_to_bigint, pol_add_assign, pol_adjoin_root, pol_mul_wide2,
+    pol_remove_root_2exp, pol_sub_assign,
+};
+use crate::utils::{
     pol_add_assign_ext_circuit, pol_adjoin_root_ext_circuit, pol_mul_wide2_ext_circuit,
 };
-use crate::{
-    constraint_consumer::ConstraintConsumer,
-    develop::utils::{
-        bigint_to_columns, columns_to_bigint, pol_add_assign, pol_adjoin_root, pol_mul_wide2,
-        pol_remove_root_2exp, pol_sub_assign,
-    },
-};
+use starky::constraint_consumer::ConstraintConsumer;
+use starky::constraint_consumer::RecursiveConstraintConsumer;
 
 use super::addcy::{eval_ext_circuit_addcy, eval_packed_generic_addcy};
 use super::utils::pol_sub_assign_ext_circuit;
 
-use crate::develop::constants::{LIMB_BITS, N_LIMBS};
+use crate::constants::{LIMB_BITS, N_LIMBS};
 
 pub const AUX_COEFF_ABS_MAX: i64 = 1 << 29;
 
@@ -347,24 +345,21 @@ mod tests {
     };
 
     use crate::{
+        constants::{LIMB_BITS, N_LIMBS},
+        modular::{bn254_base_modulus_bigint, bn254_base_modulus_packfield},
+        modular::{eval_modular_op, eval_modular_op_circuit},
+        modular::{write_modulus_aux, write_u256},
+        range_check::{
+            eval_split_u16_range_check, eval_split_u16_range_check_circuit,
+            generate_split_u16_range_check, split_u16_range_check_pairs,
+        },
+        utils::fq_to_columns,
+        utils::{columns_to_bigint, pol_mul_wide, pol_mul_wide_ext_circuit},
+    };
+
+    use starky::{
         config::StarkConfig,
         constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
-        develop::{
-            constants::{LIMB_BITS, N_LIMBS},
-            modular::{eval_modular_op, eval_modular_op_circuit},
-            range_check::{
-                eval_split_u16_range_check, eval_split_u16_range_check_circuit,
-                generate_split_u16_range_check, split_u16_range_check_pairs,
-            },
-        },
-        develop::{
-            modular::{bn254_base_modulus_bigint, bn254_base_modulus_packfield},
-            utils::{columns_to_bigint, pol_mul_wide, pol_mul_wide_ext_circuit},
-        },
-        develop::{
-            modular::{write_modulus_aux, write_u256},
-            utils::fq_to_columns,
-        },
         permutation::PermutationPair,
         prover::prove,
         recursive_verifier::{
@@ -384,6 +379,9 @@ mod tests {
     const START_RANGE_CHECK: usize = 2 * N_LIMBS;
     const NUM_RANGE_CHECK: usize = 7 * N_LIMBS - 1;
     const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECK;
+
+    const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECK;
+    const PUBLIC_INPUTS: usize = 0;
 
     #[derive(Clone, Copy)]
     pub struct ModularStark<F: RichField + Extendable<D>, const D: usize> {
@@ -454,12 +452,12 @@ mod tests {
     }
 
     impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for ModularStark<F, D> {
-        const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECK;
-        const PUBLIC_INPUTS: usize = 0;
+        const COLUMNS: usize = COLUMNS;
+        const PUBLIC_INPUTS: usize = PUBLIC_INPUTS;
 
         fn eval_packed_generic<FE, P, const D2: usize>(
             &self,
-            vars: StarkEvaluationVars<FE, P, { Self::COLUMNS }, { Self::PUBLIC_INPUTS }>,
+            vars: StarkEvaluationVars<FE, P, COLUMNS, PUBLIC_INPUTS>,
             yield_constr: &mut ConstraintConsumer<P>,
         ) where
             FE: FieldExtension<D2, BaseField = F>,
@@ -504,7 +502,7 @@ mod tests {
         fn eval_ext_circuit(
             &self,
             builder: &mut CircuitBuilder<F, D>,
-            vars: StarkEvaluationTargets<D, { Self::COLUMNS }, { Self::PUBLIC_INPUTS }>,
+            vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
             yield_constr: &mut RecursiveConstraintConsumer<F, D>,
         ) {
             let lv = vars.local_values.clone();
@@ -583,7 +581,7 @@ mod tests {
         let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
         let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
         set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
-        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, &pt, &inner_config);
+        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
         let data = builder.build::<C>();
         let _proof = data.prove(pw).unwrap();
     }
