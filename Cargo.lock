@@ -690,6 +690,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "starky"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73e8e3cedd5a3dd61a00cc83150002e7609947b5a4a20244ef34fcbd1a17f649"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "log",
+ "plonky2",
+ "plonky2_maybe_rayon",
+]
+
+[[package]]
 name = "starky-bn254"
 version = "0.1.1"
 dependencies = [
@@ -707,6 +720,7 @@ dependencies = [
  "plonky2_maybe_rayon",
  "rand",
  "rand_chacha",
+ "starky",
  "static_assertions",
 ]
 

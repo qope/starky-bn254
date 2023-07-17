@@ -4,7 +4,7 @@ use plonky2::{
     plonk::circuit_builder::CircuitBuilder,
 };
 
-use crate::develop::{
+use crate::{
     modular::write_u256,
     utils::{pol_add_wide, pol_mul_wide, pol_sub_wide},
 };

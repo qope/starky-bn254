@@ -1,29 +1,16 @@
-#![allow(incomplete_features)]
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::upper_case_acronyms)]
-#![feature(generic_const_exprs)]
-#![cfg_attr(not(feature = "std"), no_std)]
-
-extern crate alloc;
-
-mod get_challenges;
-
-pub mod config;
-pub mod constraint_consumer;
-pub mod develop;
+pub mod addcy;
+pub mod constants;
+pub mod fq12;
+pub mod fq12_exp;
+pub mod fq2;
+pub mod g1;
+pub mod g1_exp;
+pub mod g2;
+pub mod g2_exp;
+pub mod instruction;
 pub mod lookup;
+pub mod modular;
+pub mod modular_zero;
 pub mod native;
-pub mod permutation;
-pub mod proof;
-pub mod prover;
-pub mod recursive_verifier;
-pub mod stark;
-pub mod stark_testing;
-
-pub mod vanishing_poly;
-pub mod vars;
-pub mod verifier;
-
-#[cfg(test)]
-pub mod fibonacci_stark;
+pub mod range_check;
+pub mod utils;

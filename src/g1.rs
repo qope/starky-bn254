@@ -16,27 +16,27 @@ use plonky2::{
     util::transpose,
 };
 
-use crate::develop::modular_zero::{generate_modular_zero, write_modulus_aux_zero};
-use crate::develop::range_check::{eval_split_u16_range_check, eval_split_u16_range_check_circuit};
-use crate::develop::utils::{
+use crate::constants::N_LIMBS;
+use crate::modular::write_modulus_aux;
+use crate::modular_zero::{generate_modular_zero, write_modulus_aux_zero};
+use crate::range_check::{eval_split_u16_range_check, eval_split_u16_range_check_circuit};
+use crate::utils::{
     columns_to_fq, fq_to_columns, i64_to_column_positive, pol_add, pol_mul_wide, pol_sub,
     pol_sub_normal, positive_column_to_i64,
 };
-use crate::{
+use starky::{
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
-    develop::constants::N_LIMBS,
-    develop::modular::write_modulus_aux,
     permutation::PermutationPair,
     stark::Stark,
     vars::{StarkEvaluationTargets, StarkEvaluationVars},
 };
 
-use crate::develop::modular::{
-    bn254_base_modulus_bigint, eval_modular_op_circuit, generate_modular_op, read_modulus_aux,
-    write_u256,
+use crate::modular::{
+    bn254_base_modulus_bigint, bn254_base_modulus_packfield, eval_modular_op,
+    eval_modular_op_circuit, generate_modular_op, read_modulus_aux, read_u256, write_u256,
+    ModulusAux,
 };
 
-use super::modular::{bn254_base_modulus_packfield, eval_modular_op, read_u256, ModulusAux};
 use super::modular_zero::{
     eval_modular_zero, eval_modular_zero_circuit, read_modulus_aux_zero, ModulusAuxZero,
 };
@@ -419,6 +419,9 @@ const START_RANGE_CHECK: usize = 4 * N_LIMBS;
 const NUM_RANGE_CHECKS: usize = 20 * N_LIMBS - 4;
 const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECKS;
 
+const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECKS;
+const PUBLIC_INPUTS: usize = 0;
+
 #[derive(Clone, Copy)]
 pub struct G1Stark<F: RichField + Extendable<D>, const D: usize> {
     _phantom: PhantomData<F>,
@@ -515,12 +518,12 @@ impl<F: RichField + Extendable<D>, const D: usize> G1Stark<F, D> {
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1Stark<F, D> {
-    const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECKS;
-    const PUBLIC_INPUTS: usize = 0;
+    const COLUMNS: usize = COLUMNS;
+    const PUBLIC_INPUTS: usize = PUBLIC_INPUTS;
 
     fn eval_packed_generic<FE, P, const D2: usize>(
         &self,
-        vars: StarkEvaluationVars<FE, P, { Self::COLUMNS }, { Self::PUBLIC_INPUTS }>,
+        vars: StarkEvaluationVars<FE, P, COLUMNS, PUBLIC_INPUTS>,
         yield_constr: &mut ConstraintConsumer<P>,
     ) where
         FE: FieldExtension<D2, BaseField = F>,
@@ -578,7 +581,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1Stark<F, D>
     fn eval_ext_circuit(
         &self,
         builder: &mut CircuitBuilder<F, D>,
-        vars: StarkEvaluationTargets<D, { Self::COLUMNS }, { Self::PUBLIC_INPUTS }>,
+        vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
         yield_constr: &mut RecursiveConstraintConsumer<F, D>,
     ) {
         eval_split_u16_range_check_circuit(
@@ -655,9 +658,8 @@ mod tests {
         util::timing::TimingTree,
     };
 
-    use crate::{
+    use starky::{
         config::StarkConfig,
-        develop::g1::G1Stark,
         prover::prove,
         recursive_verifier::{
             add_virtual_stark_proof_with_pis, set_stark_proof_with_pis_target,
@@ -665,6 +667,8 @@ mod tests {
         },
         verifier::verify_stark_proof,
     };
+
+    use crate::g1::G1Stark;
 
     #[test]
     fn test_g1_mul() {
@@ -696,7 +700,7 @@ mod tests {
         let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
         let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
         set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
-        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, &pt, &inner_config);
+        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
         let data = builder.build::<C>();
 
         println!("start plonky2 proof generation");
