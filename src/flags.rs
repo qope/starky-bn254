@@ -26,7 +26,14 @@
 // normal colsとwitness colsがある。
 // normal colsは遷移的に生成するのが良く、witness colsは最後にまとめて生成するのが良い
 
-use plonky2::hash::hash_types::RichField;
+use plonky2::{
+    field::packed::PackedField,
+    field::{extension::Extendable, types::Field},
+    hash::hash_types::RichField,
+    iop::ext_target::ExtensionTarget,
+    plonk::circuit_builder::CircuitBuilder,
+};
+use starky::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
 
 const NUM_INPUT_LIMBS: usize = 8;
 const INPUT_LIMB_BITS: usize = 32;
@@ -113,31 +120,202 @@ pub fn generate_flags_next_row<F: RichField>(
     nv[filtered_bit_col] = nv[bit_col] * nv[b_col];
 }
 
+pub fn eval_flags<P: PackedField, const N: usize>(
+    yield_constr: &mut ConstraintConsumer<P>,
+    lv: &[P; N],
+    nv: &[P; N],
+    start_flag_col: usize,
+) {
+    let is_rotate_col = start_flag_col;
+    let a_col = start_flag_col + 1;
+    let b_col = start_flag_col + 2;
+    let filtered_bit_col = start_flag_col + 3;
+    let bit_col = start_flag_col + 4;
+    let start_limbs = start_flag_col + 5;
+    let end_limbs = start_limbs + NUM_INPUT_LIMBS;
+
+    // initial condition
+    yield_constr.constraint_first_row(lv[a_col]);
+    yield_constr.constraint_first_row(lv[b_col] - P::ONES);
+
+    // constraint
+    // bit_col is should be 0 or 1.
+    let bit = lv[bit_col];
+    yield_constr.constraint(bit * bit - bit);
+    // filtered_col is multiplication of bit_col and b_col.
+    yield_constr.constraint(bit * lv[b_col] - lv[filtered_bit_col]);
+    // this is optional
+    yield_constr.constraint(lv[is_rotate_col] * lv[a_col]);
+
+    // transition
+    yield_constr.constraint_transition(lv[a_col] + nv[a_col] - P::ONES);
+    yield_constr.constraint_transition(lv[b_col] + nv[b_col] - P::ONES);
+    // split: first_limb = next_bit + 2*next_first_limb
+    let first_limb = lv[start_limbs];
+    let next_first_limb = nv[start_limbs];
+    let next_bit = nv[bit_col];
+    let is_split = lv[a_col];
+    yield_constr.constraint_transition(
+        is_split * (first_limb - P::Scalar::from_canonical_u64(2) * next_first_limb - next_bit),
+    );
+    // not split: first_limb = next_first_limb and next_bit = bit
+    let is_not_split = P::ONES - is_split;
+    let is_rotate = lv[is_rotate_col];
+    let is_not_rotate = P::ONES - is_rotate;
+    yield_constr.constraint_transition(is_not_split * (next_bit - bit));
+    yield_constr
+        .constraint_transition(is_not_rotate * is_not_split * (first_limb - next_first_limb));
+    // rotate
+    for col in start_limbs + 1..end_limbs {
+        yield_constr.constraint_transition(is_rotate * (nv[col - 1] - lv[col]));
+    }
+    yield_constr.constraint_transition(is_rotate * nv[end_limbs - 1]);
+    // not rotate
+    for col in start_limbs + 1..end_limbs {
+        yield_constr.constraint_transition(is_not_rotate * (nv[col] - lv[col]));
+    }
+}
+
+pub fn eval_flags_circuit<F: RichField + Extendable<D>, const D: usize, const N: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+    lv: &[ExtensionTarget<D>; N],
+    nv: &[ExtensionTarget<D>; N],
+    start_flag_col: usize,
+) {
+    let one = builder.one_extension();
+    let is_rotate_col = start_flag_col;
+    let a_col = start_flag_col + 1;
+    let b_col = start_flag_col + 2;
+    let filtered_bit_col = start_flag_col + 3;
+    let bit_col = start_flag_col + 4;
+    let start_limbs = start_flag_col + 5;
+    let end_limbs = start_limbs + NUM_INPUT_LIMBS;
+
+    // initial condition
+    yield_constr.constraint_first_row(builder, lv[a_col]);
+    let diff = builder.sub_extension(lv[b_col], one);
+    yield_constr.constraint_first_row(builder, diff);
+
+    // constraint
+    // bit_col is should be 0 or 1.
+    let bit = lv[bit_col];
+    let t = builder.mul_sub_extension(bit, bit, bit);
+    yield_constr.constraint(builder, t);
+    // filtered_col is multiplication of bit_col and b_col.
+    let t = builder.mul_sub_extension(bit, lv[b_col], lv[filtered_bit_col]);
+    yield_constr.constraint(builder, t);
+    // this is optional
+    let t = builder.mul_extension(lv[is_rotate_col], lv[a_col]);
+    yield_constr.constraint(builder, t);
+
+    // transition
+    let sum = builder.add_extension(lv[a_col], nv[a_col]);
+    let diff = builder.sub_extension(sum, one);
+    yield_constr.constraint_transition(builder, diff);
+    let sum = builder.add_extension(lv[b_col], nv[b_col]);
+    let diff = builder.sub_extension(sum, one);
+    yield_constr.constraint_transition(builder, diff);
+    // split: first_limb = next_bit + 2*next_first_limb
+    let first_limb = lv[start_limbs];
+    let next_first_limb = nv[start_limbs];
+    let next_bit = nv[bit_col];
+    let is_split = lv[a_col];
+    let two = builder.two_extension();
+    let double_next_first_limb = builder.mul_extension(two, next_first_limb);
+    let sum = builder.add_extension(double_next_first_limb, next_bit);
+    let diff = builder.sub_extension(first_limb, sum);
+    let t = builder.mul_extension(is_split, diff);
+    yield_constr.constraint_transition(builder, t);
+    // not split: first_limb = next_first_limb and next_bit = bit
+    let is_not_split = builder.sub_extension(one, is_split);
+    let is_rotate = lv[is_rotate_col];
+    let is_not_rotate = builder.sub_extension(one, is_rotate);
+    let diff = builder.sub_extension(next_bit, bit);
+    let t = builder.mul_extension(is_not_split, diff);
+    yield_constr.constraint_transition(builder, t);
+    let diff = builder.sub_extension(first_limb, next_first_limb);
+    let t = builder.mul_extension(is_not_rotate, is_not_split);
+    let t = builder.mul_extension(t, diff);
+    yield_constr.constraint_transition(builder, t);
+    // rotate
+    for col in start_limbs + 1..end_limbs {
+        let diff = builder.sub_extension(nv[col - 1], lv[col]);
+        let t = builder.mul_extension(is_rotate, diff);
+        yield_constr.constraint_transition(builder, t);
+    }
+    let t = builder.mul_extension(is_rotate, nv[end_limbs - 1]);
+    yield_constr.constraint_transition(builder, t);
+    // not rotate
+    for col in start_limbs + 1..end_limbs {
+        let diff = builder.sub_extension(nv[col], lv[col]);
+        let t = builder.mul_extension(is_not_rotate, diff);
+        yield_constr.constraint_transition(builder, t);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{marker::PhantomData, time::Instant};
+
     use bitvec::prelude::*;
     use itertools::Itertools;
-    use plonky2::field::{
-        goldilocks_field::GoldilocksField,
-        types::{Field, PrimeField64},
+    use plonky2::{
+        field::{
+            extension::{Extendable, FieldExtension},
+            packed::PackedField,
+            polynomial::PolynomialValues,
+            types::{Field, PrimeField64},
+        },
+        hash::hash_types::RichField,
+        iop::witness::PartialWitness,
+        plonk::{
+            circuit_builder::CircuitBuilder,
+            circuit_data::CircuitConfig,
+            config::{GenericConfig, PoseidonGoldilocksConfig},
+        },
+        util::{timing::TimingTree, transpose},
+    };
+    use starky::{
+        config::StarkConfig,
+        constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
+        prover::prove,
+        recursive_verifier::{
+            add_virtual_stark_proof_with_pis, set_stark_proof_with_pis_target,
+            verify_stark_proof_circuit,
+        },
+        stark::Stark,
+        vars::{StarkEvaluationTargets, StarkEvaluationVars},
+        verifier::verify_stark_proof,
     };
 
     use crate::flags::{INPUT_LIMB_BITS, NUM_INPUT_LIMBS};
 
-    use super::{generate_flags_first_row, generate_flags_next_row};
+    use super::{
+        eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
+    };
 
-    type F = GoldilocksField;
+    const D: usize = 2;
+    type C = PoseidonGoldilocksConfig;
+    type F = <C as GenericConfig<D>>::F;
 
     #[test]
-    fn test_flag() {
+    fn test_flag_native() {
+        let start_flag_col = 0;
+        // let is_rotate_col = start_flag_col;
+        // let a_col = start_flag_col + 1;
+        // let b_col = start_flag_col + 2;
+        // let filtered_bit_col = start_flag_col + 3;
+        // let bit_col = start_flag_col + 4;
+        let start_limbs = start_flag_col + 5;
+        // let end_limbs = start_limbs + NUM_INPUT_LIMBS;
+
         let input_limbs: [u32; NUM_INPUT_LIMBS] = rand::random();
         let mut lv = vec![F::ZERO; 5 + NUM_INPUT_LIMBS];
 
         let num_rows = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
-        let start_flag_col = 0;
         generate_flags_first_row(&mut lv, 0, input_limbs);
         let mut rows = vec![lv.clone()];
-
         for i in 0..num_rows - 1 {
             let mut nv = vec![F::ZERO; 5 + NUM_INPUT_LIMBS];
             generate_flags_next_row(&lv, &mut nv, i, start_flag_col);
@@ -145,6 +323,8 @@ mod tests {
             lv = nv;
         }
         assert!(rows.len() == num_rows);
+
+        // assertions
         let filtered_bit_col = start_flag_col + 4;
         let mut filtered_bits = vec![];
         for cur_row in (0..num_rows).step_by(2) {
@@ -162,6 +342,105 @@ mod tests {
 
         assert!(bits == filtered_bits);
 
-        // dbg!(&rows[num_rows - 2]);
+        for row in rows {
+            dbg!(&row[start_limbs]);
+        }
+    }
+
+    const COLUMNS: usize = 5 + NUM_INPUT_LIMBS;
+    const PUBLIC_INPUTS: usize = 0;
+
+    #[derive(Clone, Copy)]
+    pub struct FlagStark<F: RichField + Extendable<D>, const D: usize> {
+        _phantom: PhantomData<F>,
+    }
+
+    impl<F: RichField + Extendable<D>, const D: usize> FlagStark<F, D> {
+        pub fn new() -> Self {
+            Self {
+                _phantom: PhantomData,
+            }
+        }
+
+        pub fn generate_trace(&self) -> Vec<PolynomialValues<F>> {
+            let input_limbs: [u32; NUM_INPUT_LIMBS] = rand::random();
+            let mut lv = vec![F::ZERO; 5 + NUM_INPUT_LIMBS];
+            let num_rows = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
+            let start_flag_col = 0;
+            generate_flags_first_row(&mut lv, 0, input_limbs);
+            let mut rows = vec![lv.clone()];
+            for i in 0..num_rows - 1 {
+                let mut nv = vec![F::ZERO; 5 + NUM_INPUT_LIMBS];
+                generate_flags_next_row(&lv, &mut nv, i, start_flag_col);
+                rows.push(nv.clone());
+                lv = nv;
+            }
+            let trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
+            trace_cols
+                .into_iter()
+                .map(|column| PolynomialValues::new(column))
+                .collect()
+        }
+    }
+
+    impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for FlagStark<F, D> {
+        const COLUMNS: usize = COLUMNS;
+        const PUBLIC_INPUTS: usize = PUBLIC_INPUTS;
+
+        fn eval_packed_generic<FE, P, const D2: usize>(
+            &self,
+            vars: StarkEvaluationVars<FE, P, COLUMNS, PUBLIC_INPUTS>,
+            yield_constr: &mut ConstraintConsumer<P>,
+        ) where
+            FE: FieldExtension<D2, BaseField = F>,
+            P: PackedField<Scalar = FE>,
+        {
+            eval_flags(yield_constr, vars.local_values, vars.next_values, 0);
+        }
+
+        fn eval_ext_circuit(
+            &self,
+            builder: &mut CircuitBuilder<F, D>,
+            vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
+            yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+        ) {
+            eval_flags_circuit(
+                builder,
+                yield_constr,
+                vars.local_values,
+                vars.next_values,
+                0,
+            );
+        }
+
+        fn constraint_degree(&self) -> usize {
+            3
+        }
+    }
+
+    #[test]
+    fn test_flag_stark() {
+        type S = FlagStark<F, D>;
+        let inner_config = StarkConfig::standard_fast_config();
+        let stark = S::new();
+        let trace = stark.generate_trace();
+        let inner_proof =
+            prove::<F, C, S, D>(stark, &inner_config, trace, [], &mut TimingTree::default())
+                .unwrap();
+        verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
+
+        let circuit_config = CircuitConfig::standard_recursion_config();
+        let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
+        let mut pw = PartialWitness::new();
+        let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
+        let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
+        set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
+        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, &pt, &inner_config);
+        let data = builder.build::<C>();
+
+        println!("start plonky2 proof generation");
+        let now = Instant::now();
+        let _proof = data.prove(pw).unwrap();
+        println!("end plonky2 proof generation: {:?}", now.elapsed());
     }
 }
