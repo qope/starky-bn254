@@ -23,9 +23,6 @@
 // split vals at r = 2*i + 1, and rotate at r = 2*limb_bits*(i+1) - 2
 // we need 8 limbs cols
 
-// normal colsとwitness colsがある。
-// normal colsは遷移的に生成するのが良く、witness colsは最後にまとめて生成するのが良い
-
 use plonky2::{
     field::packed::PackedField,
     field::{extension::Extendable, types::Field},
