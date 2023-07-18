@@ -28,5 +28,7 @@ ark-ec = "0.4.2"
 ark-ff = "0.4.2"
 ark-std = "0.4.0"
 bitvec = "1.0.1"
+byteorder = "1.4.3"
+num-traits = "0.2.15"
 
 
