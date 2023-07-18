@@ -54,7 +54,7 @@ dependencies = [
  "ark-std",
  "derivative",
  "hashbrown 0.13.2",
- "itertools",
+ "itertools 0.10.5",
  "num-traits",
  "zeroize",
 ]
@@ -71,7 +71,7 @@ dependencies = [
  "ark-std",
  "derivative",
  "digest",
- "itertools",
+ "itertools 0.10.5",
  "num-bigint",
  "num-traits",
  "paste",
@@ -366,6 +366,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1c173a5686ce8bfa551b3563d0c2170bf24ca44da99c7ca4bfdab5418c3fe57"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "keccak-hash"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -505,7 +514,7 @@ dependencies = [
  "ahash 0.7.6",
  "anyhow",
  "hashbrown 0.12.3",
- "itertools",
+ "itertools 0.10.5",
  "keccak-hash",
  "log",
  "num",
@@ -526,7 +535,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef0b0cfed734e8aec93ee0b49e3067a27111c355b9263fb1418bfe4c80656d12"
 dependencies = [
  "anyhow",
- "itertools",
+ "itertools 0.10.5",
  "num",
  "plonky2_util",
  "rand",
@@ -692,11 +701,10 @@ dependencies = [
 [[package]]
 name = "starky"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73e8e3cedd5a3dd61a00cc83150002e7609947b5a4a20244ef34fcbd1a17f649"
+source = "git+https://github.com/qope/plonky2.git?rev=0e67c1d#0e67c1d48ff6b9f6c552e7fea74b3ca5e46e7197"
 dependencies = [
  "anyhow",
- "itertools",
+ "itertools 0.11.0",
  "log",
  "plonky2",
  "plonky2_maybe_rayon",
@@ -712,7 +720,7 @@ dependencies = [
  "ark-ff",
  "ark-std",
  "bitvec",
- "itertools",
+ "itertools 0.10.5",
  "log",
  "num",
  "num-bigint",

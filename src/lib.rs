@@ -1,5 +1,6 @@
 pub mod addcy;
 pub mod constants;
+pub mod flags;
 pub mod fq12;
 pub mod fq12_exp;
 pub mod fq2;

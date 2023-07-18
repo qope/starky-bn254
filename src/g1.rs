@@ -700,7 +700,7 @@ mod tests {
         let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
         let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
         set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
-        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, pt, &inner_config);
+        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, &pt, &inner_config);
         let data = builder.build::<C>();
 
         println!("start plonky2 proof generation");
