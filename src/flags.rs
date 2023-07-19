@@ -313,7 +313,13 @@ mod tests {
         verifier::verify_stark_proof,
     };
 
-    use crate::flags::{INPUT_LIMB_BITS, NUM_INPUT_LIMBS};
+    use crate::{
+        flags::{INPUT_LIMB_BITS, NUM_INPUT_LIMBS},
+        pulse::{
+            eval_periodic_pulse, eval_periodic_pulse_circuit, eval_pulse, eval_pulse_circuit,
+            generate_periodic_pulse_witness, generate_pulse, get_pulse_col,
+        },
+    };
 
     use super::{
         eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
@@ -372,7 +378,10 @@ mod tests {
     }
 
     const MAIN_COLS: usize = 6 + NUM_INPUT_LIMBS;
-    const COLUMNS: usize = MAIN_COLS;
+    const START_FLAG_COL: usize = 0;
+    const ROTATION_PERIOD: usize = 2 * INPUT_LIMB_BITS;
+    const NUM_INPUTS: usize = 1 << 4;
+    const COLUMNS: usize = MAIN_COLS + 2 + 1 + 4 * NUM_INPUTS;
     const PUBLIC_INPUTS: usize = 0;
 
     #[derive(Clone, Copy)]
@@ -391,14 +400,13 @@ mod tests {
             &self,
             input_limbs: [u32; NUM_INPUT_LIMBS],
         ) -> Vec<Vec<F>> {
-            let start_flag_col = 0;
-            let mut lv = vec![F::ZERO; MAIN_COLS];
+            let mut lv = vec![F::ZERO; START_FLAG_COL + 6 + NUM_INPUT_LIMBS];
             let num_rows = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
             generate_flags_first_row(&mut lv, 0, input_limbs);
             let mut rows = vec![lv.clone()];
             for i in 0..num_rows - 1 {
                 let mut nv = vec![F::ZERO; lv.len()];
-                generate_flags_next_row(&lv, &mut nv, i, start_flag_col);
+                generate_flags_next_row(&lv, &mut nv, i, START_FLAG_COL);
                 rows.push(nv.clone());
                 lv = nv;
             }
@@ -410,10 +418,30 @@ mod tests {
             inputs: Vec<[u32; NUM_INPUT_LIMBS]>,
         ) -> Vec<PolynomialValues<F>> {
             let mut rows = vec![];
-            for input in inputs {
+            for input in inputs.clone() {
                 rows.extend(self.generate_trace_rows_for_one_block(input));
             }
-            let trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
+            let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
+
+            let rotation_period = 2 * INPUT_LIMB_BITS;
+            let start_flag_col = 0;
+            generate_periodic_pulse_witness(
+                &mut trace_cols,
+                start_flag_col + 1,
+                rotation_period,
+                rotation_period - 2,
+            );
+
+            let num_rows_per_block = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
+            let mut pulse_positions = vec![];
+            for i in 0..inputs.len() {
+                pulse_positions.extend(vec![
+                    i * num_rows_per_block,
+                    i * num_rows_per_block + num_rows_per_block - 1,
+                ]);
+            }
+            generate_pulse(&mut trace_cols, pulse_positions);
+
             trace_cols
                 .into_iter()
                 .map(|column| PolynomialValues::new(column))
@@ -433,7 +461,44 @@ mod tests {
             FE: FieldExtension<D2, BaseField = F>,
             P: PackedField<Scalar = FE>,
         {
-            eval_flags(yield_constr, vars.local_values, vars.next_values, 0);
+            let num_rows_per_block = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
+            let mut pulse_positions = vec![];
+            for i in 0..NUM_INPUTS {
+                pulse_positions.extend(vec![
+                    i * num_rows_per_block,
+                    i * num_rows_per_block + num_rows_per_block - 1,
+                ]);
+            }
+            // constraints for is_final
+            let mut output = P::ZEROS;
+            for i in (0..2 * NUM_INPUTS).skip(1).step_by(2) {
+                output = output + vars.local_values[get_pulse_col(MAIN_COLS + 2, i)];
+            }
+            let is_final = vars.local_values[START_FLAG_COL];
+            yield_constr.constraint(is_final - output);
+
+            eval_flags(
+                yield_constr,
+                vars.local_values,
+                vars.next_values,
+                START_FLAG_COL,
+            );
+            eval_periodic_pulse(
+                yield_constr,
+                vars.local_values,
+                vars.next_values,
+                START_FLAG_COL + 1,
+                MAIN_COLS,
+                ROTATION_PERIOD,
+                ROTATION_PERIOD - 2,
+            );
+            eval_pulse(
+                yield_constr,
+                vars.local_values,
+                vars.next_values,
+                MAIN_COLS + 2,
+                pulse_positions,
+            );
         }
 
         fn eval_ext_circuit(
@@ -442,12 +507,49 @@ mod tests {
             vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
             yield_constr: &mut RecursiveConstraintConsumer<F, D>,
         ) {
+            let num_rows_per_block = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
+            let mut pulse_positions = vec![];
+            for i in 0..NUM_INPUTS {
+                pulse_positions.extend(vec![
+                    i * num_rows_per_block,
+                    i * num_rows_per_block + num_rows_per_block - 1,
+                ]);
+            }
+
+            // constraints for is_final
+            let mut output = builder.zero_extension();
+            for i in (0..2 * NUM_INPUTS).skip(1).step_by(2) {
+                output = builder
+                    .add_extension(output, vars.local_values[get_pulse_col(MAIN_COLS + 2, i)]);
+            }
+            let is_final = vars.local_values[START_FLAG_COL];
+            let diff = builder.sub_extension(is_final, output);
+            yield_constr.constraint(builder, diff);
+
             eval_flags_circuit(
                 builder,
                 yield_constr,
                 vars.local_values,
                 vars.next_values,
-                0,
+                START_FLAG_COL,
+            );
+            eval_periodic_pulse_circuit(
+                builder,
+                yield_constr,
+                vars.local_values,
+                vars.next_values,
+                START_FLAG_COL + 1,
+                MAIN_COLS,
+                ROTATION_PERIOD,
+                ROTATION_PERIOD - 2,
+            );
+            eval_pulse_circuit(
+                builder,
+                yield_constr,
+                vars.local_values,
+                vars.next_values,
+                MAIN_COLS + 2,
+                pulse_positions,
             );
         }
 
@@ -459,7 +561,9 @@ mod tests {
     #[test]
     fn test_flag_stark() {
         let mut rng = rand::thread_rng();
-        let inputs = (0..2).map(|_| [rng.gen(); NUM_INPUT_LIMBS]).collect_vec();
+        let inputs = (0..NUM_INPUTS)
+            .map(|_| [rng.gen(); NUM_INPUT_LIMBS])
+            .collect_vec();
 
         type S = FlagStark<F, D>;
         let inner_config = StarkConfig::standard_fast_config();

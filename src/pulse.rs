@@ -96,6 +96,7 @@ pub fn eval_pulse_circuit<F: RichField + Extendable<D>, const D: usize, const N:
     }
 }
 
+/// add 2 cols
 pub fn generate_periodic_pulse_witness<F: RichField>(
     trace_cols: &mut Vec<Vec<F>>,
     pulse_col: usize,
@@ -146,13 +147,14 @@ pub fn eval_periodic_pulse<P: PackedField, const N: usize>(
     yield_constr: &mut ConstraintConsumer<P>,
     lv: &[P; N],
     nv: &[P; N],
+    pulse_col: usize,
     start_pulse_col: usize,
     period: usize,
     first_pulse: usize,
 ) {
     let counter = lv[start_pulse_col];
     let witness = lv[start_pulse_col + 1];
-    let is_reset = lv[start_pulse_col + 2];
+    let is_reset = lv[pulse_col];
     let next_counter = nv[start_pulse_col];
 
     let initial_counter = period - first_pulse - 1;
@@ -165,6 +167,45 @@ pub fn eval_periodic_pulse<P: PackedField, const N: usize>(
     let delta = counter - P::Scalar::from_canonical_usize(period - 1);
     yield_constr.constraint(delta * witness + is_reset - P::ONES); // is_reset = 1 - delta * witness
     yield_constr.constraint(delta * is_reset);
+}
+
+pub fn eval_periodic_pulse_circuit<F: RichField + Extendable<D>, const D: usize, const N: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+    lv: &[ExtensionTarget<D>; N],
+    nv: &[ExtensionTarget<D>; N],
+    pulse_col: usize,
+    start_pulse_col: usize,
+    period: usize,
+    first_pulse: usize,
+) {
+    let one = builder.one_extension();
+    let counter = lv[start_pulse_col];
+    let witness = lv[start_pulse_col + 1];
+    let is_reset = lv[pulse_col];
+    let next_counter = nv[start_pulse_col];
+
+    let initial_counter =
+        builder.constant_extension(F::Extension::from_canonical_usize(period - first_pulse - 1));
+    let diff = builder.sub_extension(counter, initial_counter);
+    yield_constr.constraint_first_row(builder, diff);
+
+    let is_not_reset = builder.sub_extension(one, is_reset);
+    let diff = builder.sub_extension(next_counter, counter);
+    let diff = builder.sub_extension(diff, one);
+    let t = builder.mul_extension(is_not_reset, diff);
+    yield_constr.constraint_transition(builder, t);
+    let t = builder.mul_extension(is_reset, next_counter);
+    yield_constr.constraint_transition(builder, t);
+
+    let period_minus_one =
+        builder.constant_extension(F::Extension::from_canonical_usize(period - 1));
+    let delta = builder.sub_extension(counter, period_minus_one);
+    let is_reset_minus_one = builder.sub_extension(is_reset, one);
+    let t = builder.mul_add_extension(delta, witness, is_reset_minus_one);
+    yield_constr.constraint(builder, t);
+    let t = builder.mul_extension(delta, is_reset);
+    yield_constr.constraint(builder, t);
 }
 
 #[cfg(test)]
