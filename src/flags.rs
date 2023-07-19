@@ -1,23 +1,27 @@
 // generate flags
-// in the case of val0 = 1101, val1 = 1011, val2=0
-// r | a | b | b'| bit | val0 | val1
-// -------------------------------
-// 0 | 0 | 1 | 1 | 1  | 101       <- public input (1 + 2*101 = val0, val1)
-// 0 | 1 | 0 | 0 | ?  | 101       <- split
-// 0 | 0 | 1 | 1 | 1  | 01
-// 0 | 1 | 0 | 0 | ?  | 01        <- split
-// 0 | 0 | 1 | 0 | 0  | 1
-// 0 | 1 | 0 | 0 | ?  | 1         <- split
-// 1 | 0 | 1 | 1 | 1  | 0         <- rotate (r=8-2)
-// 0 | 1 | 0 | 0 | ?  | val1      <- split (<- output)
-// 0 | 0 | 1 | 1 | 1  | 011
-// 0 | 1 | 0 | 0 | ?  | 011       <- split
-// 0 | 0 | 1 | 0 | 0  | 11
-// 0 | 1 | 0 | 0 | ?  | 11        <- split
-// 0 | 0 | 1 | 1 | 1  | 1
-// 0 | 1 | 0 | 0 | ?  | 1         <- split
-// 1 | 0 | 1 | 1 | 1  | 0         <- rotate (r=16-2)
-// 0 | 1 | 0 | 0 | ?  | 0         <- public output
+// in the case of val0 = 1101, val1 = 1011
+//| f | r | a | b | b'| bit | val0 | val1
+//--------------------------------------
+//| 0 | 0 | 0 | 1 | 1 |  1  | 101  |val1 <- public input (1 + 2*101 = val0, val1)
+//| 0 | 0 | 1 | 0 | 0 |  1  | 101  |val1 <- split
+//| 0 | 0 | 0 | 1 | 1 |  1  | 01   |val1
+//| 0 | 0 | 1 | 0 | 0 |  1  | 01   |val1 <- split
+//| 0 | 0 | 0 | 1 | 0 |  0  | 1    |val1
+//| 0 | 0 | 1 | 0 | 0 |  0  | 1    |val1 <- split
+//| 0 | 1 | 0 | 1 | 1 |  1  | 0    |val1 <- rotate (r=8-2)
+//| 0 | 0 | 1 | 0 | 0 |  1  | val1 | 0   <- split (<- output)
+//| 0 | 0 | 0 | 1 | 1 |  1  | 011  | 0
+//| 0 | 0 | 1 | 0 | 0 |  1  | 011  | 0   <- split
+//| 0 | 0 | 0 | 1 | 0 |  0  | 11   | 0
+//| 0 | 0 | 1 | 0 | 0 |  0  | 11   | 0   <- split
+//| 0 | 0 | 0 | 1 | 1 |  1  | 1    | 0
+//| 0 | 0 | 1 | 0 | 0 |  1  | 1    | 0   <- split
+//| 0 | 1 | 0 | 1 | 1 |  1  | 0    | 0   <- rotate (r=16-2)
+//| 1 | 0 | 1 | 0 | 0 |  1  | 0    | 0   <- public output <- split
+
+// f = is_final
+// r = is_rotate
+// b' = filetered_bit (= b * bit)
 
 // overall, we need 2*bits_len rows.
 // split vals at r = 2*i + 1, and rotate at r = 2*limb_bits*(i+1) - 2
@@ -42,12 +46,13 @@ pub fn generate_flags_first_row<F: RichField>(
     start_flag_col: usize,
     limbs: [u32; NUM_INPUT_LIMBS],
 ) {
-    let is_rotate_col = start_flag_col;
-    let a_col = start_flag_col + 1;
-    let b_col = start_flag_col + 2;
-    let filtered_bit_col = start_flag_col + 3;
-    let bit_col = start_flag_col + 4;
-    let start_limbs = start_flag_col + 5;
+    let is_final = start_flag_col;
+    let is_rotate_col = start_flag_col + 1;
+    let a_col = start_flag_col + 2;
+    let b_col = start_flag_col + 3;
+    let filtered_bit_col = start_flag_col + 4;
+    let bit_col = start_flag_col + 5;
+    let start_limbs = start_flag_col + 6;
     let end_limbs = start_limbs + NUM_INPUT_LIMBS;
 
     let first_limb = limbs[0];
@@ -56,6 +61,7 @@ pub fn generate_flags_first_row<F: RichField>(
     let mut new_limbs = limbs;
     new_limbs[0] = rest;
 
+    lv[is_final] = F::ZERO;
     lv[is_rotate_col] = F::ZERO;
     lv[a_col] = F::ZERO;
     lv[b_col] = F::ONE;
@@ -72,16 +78,24 @@ pub fn generate_flags_next_row<F: RichField>(
     cur_row: usize,
     start_flag_col: usize,
 ) {
-    let is_rotate_col = start_flag_col;
-    let a_col = start_flag_col + 1;
-    let b_col = start_flag_col + 2;
-    let filtered_bit_col = start_flag_col + 3;
-    let bit_col = start_flag_col + 4;
-    let start_limbs = start_flag_col + 5;
+    let is_final = start_flag_col;
+    let is_rotate_col = start_flag_col + 1;
+    let a_col = start_flag_col + 2;
+    let b_col = start_flag_col + 3;
+    let filtered_bit_col = start_flag_col + 4;
+    let bit_col = start_flag_col + 5;
+    let start_limbs = start_flag_col + 6;
     let end_limbs = start_limbs + NUM_INPUT_LIMBS;
 
     nv[a_col] = F::ONE - lv[a_col];
     nv[b_col] = F::ONE - lv[b_col];
+
+    let num_rows = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
+    if cur_row == num_rows - 2 {
+        nv[is_final] = F::ONE;
+    } else {
+        nv[is_final] = F::ZERO;
+    }
 
     if cur_row % (2 * INPUT_LIMB_BITS) == 2 * INPUT_LIMB_BITS - 3 {
         nv[is_rotate_col] = F::ONE; // is_rotate_col is one at r = 2*INPUT_LIMB_BITS*(i+1) - 2
@@ -123,12 +137,13 @@ pub fn eval_flags<P: PackedField, const N: usize>(
     nv: &[P; N],
     start_flag_col: usize,
 ) {
-    let is_rotate_col = start_flag_col;
-    let a_col = start_flag_col + 1;
-    let b_col = start_flag_col + 2;
-    let filtered_bit_col = start_flag_col + 3;
-    let bit_col = start_flag_col + 4;
-    let start_limbs = start_flag_col + 5;
+    let is_final_col = start_flag_col;
+    let is_rotate_col = start_flag_col + 1;
+    let a_col = start_flag_col + 2;
+    let b_col = start_flag_col + 3;
+    let filtered_bit_col = start_flag_col + 4;
+    let bit_col = start_flag_col + 5;
+    let start_limbs = start_flag_col + 6;
     let end_limbs = start_limbs + NUM_INPUT_LIMBS;
 
     // initial condition
@@ -143,6 +158,7 @@ pub fn eval_flags<P: PackedField, const N: usize>(
     yield_constr.constraint(bit * lv[b_col] - lv[filtered_bit_col]);
     // this is optional
     yield_constr.constraint(lv[is_rotate_col] * lv[a_col]);
+    yield_constr.constraint(lv[is_final_col] * lv[is_rotate_col]);
 
     // transition
     yield_constr.constraint_transition(lv[a_col] + nv[a_col] - P::ONES);
@@ -152,16 +168,19 @@ pub fn eval_flags<P: PackedField, const N: usize>(
     let next_first_limb = nv[start_limbs];
     let next_bit = nv[bit_col];
     let is_split = lv[a_col];
+    let is_final = lv[is_final_col];
+    let is_not_final = P::ONES - is_final;
     yield_constr.constraint_transition(
-        is_split * (first_limb - P::Scalar::from_canonical_u64(2) * next_first_limb - next_bit),
+        is_not_final * is_split * (first_limb - P::Scalar::TWO * next_first_limb - next_bit),
     );
     // not split: first_limb = next_first_limb and next_bit = bit
     let is_not_split = P::ONES - is_split;
     let is_rotate = lv[is_rotate_col];
-    let is_not_rotate = P::ONES - is_rotate;
+    let is_not_rotate_nor_final = P::ONES - is_rotate - is_final;
     yield_constr.constraint_transition(is_not_split * (next_bit - bit));
-    yield_constr
-        .constraint_transition(is_not_rotate * is_not_split * (first_limb - next_first_limb));
+    yield_constr.constraint_transition(
+        is_not_rotate_nor_final * is_not_split * (first_limb - next_first_limb),
+    );
     // rotate
     for col in start_limbs + 1..end_limbs {
         yield_constr.constraint_transition(is_rotate * (nv[col - 1] - lv[col]));
@@ -169,7 +188,7 @@ pub fn eval_flags<P: PackedField, const N: usize>(
     yield_constr.constraint_transition(is_rotate * nv[end_limbs - 1]);
     // not rotate
     for col in start_limbs + 1..end_limbs {
-        yield_constr.constraint_transition(is_not_rotate * (nv[col] - lv[col]));
+        yield_constr.constraint_transition(is_not_rotate_nor_final * (nv[col] - lv[col]));
     }
 }
 
@@ -181,12 +200,13 @@ pub fn eval_flags_circuit<F: RichField + Extendable<D>, const D: usize, const N:
     start_flag_col: usize,
 ) {
     let one = builder.one_extension();
-    let is_rotate_col = start_flag_col;
-    let a_col = start_flag_col + 1;
-    let b_col = start_flag_col + 2;
-    let filtered_bit_col = start_flag_col + 3;
-    let bit_col = start_flag_col + 4;
-    let start_limbs = start_flag_col + 5;
+    let is_final_col = start_flag_col;
+    let is_rotate_col = start_flag_col + 1;
+    let a_col = start_flag_col + 2;
+    let b_col = start_flag_col + 3;
+    let filtered_bit_col = start_flag_col + 4;
+    let bit_col = start_flag_col + 5;
+    let start_limbs = start_flag_col + 6;
     let end_limbs = start_limbs + NUM_INPUT_LIMBS;
 
     // initial condition
@@ -205,6 +225,8 @@ pub fn eval_flags_circuit<F: RichField + Extendable<D>, const D: usize, const N:
     // this is optional
     let t = builder.mul_extension(lv[is_rotate_col], lv[a_col]);
     yield_constr.constraint(builder, t);
+    let t = builder.mul_extension(lv[is_final_col], lv[is_rotate_col]);
+    yield_constr.constraint(builder, t);
 
     // transition
     let sum = builder.add_extension(lv[a_col], nv[a_col]);
@@ -218,21 +240,25 @@ pub fn eval_flags_circuit<F: RichField + Extendable<D>, const D: usize, const N:
     let next_first_limb = nv[start_limbs];
     let next_bit = nv[bit_col];
     let is_split = lv[a_col];
+    let is_final = lv[is_final_col];
+    let is_not_final = builder.sub_extension(one, is_final);
     let two = builder.two_extension();
     let double_next_first_limb = builder.mul_extension(two, next_first_limb);
     let sum = builder.add_extension(double_next_first_limb, next_bit);
     let diff = builder.sub_extension(first_limb, sum);
-    let t = builder.mul_extension(is_split, diff);
+    let is_split_and_not_final = builder.mul_extension(is_split, is_not_final);
+    let t = builder.mul_extension(is_split_and_not_final, diff);
     yield_constr.constraint_transition(builder, t);
     // not split: first_limb = next_first_limb and next_bit = bit
     let is_not_split = builder.sub_extension(one, is_split);
     let is_rotate = lv[is_rotate_col];
-    let is_not_rotate = builder.sub_extension(one, is_rotate);
+    let is_rotate_or_final = builder.add_extension(is_rotate, is_final);
+    let is_not_rotate_nor_final = builder.sub_extension(one, is_rotate_or_final);
     let diff = builder.sub_extension(next_bit, bit);
     let t = builder.mul_extension(is_not_split, diff);
     yield_constr.constraint_transition(builder, t);
     let diff = builder.sub_extension(first_limb, next_first_limb);
-    let t = builder.mul_extension(is_not_rotate, is_not_split);
+    let t = builder.mul_extension(is_not_rotate_nor_final, is_not_split);
     let t = builder.mul_extension(t, diff);
     yield_constr.constraint_transition(builder, t);
     // rotate
@@ -246,7 +272,7 @@ pub fn eval_flags_circuit<F: RichField + Extendable<D>, const D: usize, const N:
     // not rotate
     for col in start_limbs + 1..end_limbs {
         let diff = builder.sub_extension(nv[col], lv[col]);
-        let t = builder.mul_extension(is_not_rotate, diff);
+        let t = builder.mul_extension(is_not_rotate_nor_final, diff);
         yield_constr.constraint_transition(builder, t);
     }
 }
@@ -273,6 +299,7 @@ mod tests {
         },
         util::{timing::TimingTree, transpose},
     };
+    use rand::Rng;
     use starky::{
         config::StarkConfig,
         constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
@@ -299,22 +326,23 @@ mod tests {
     #[test]
     fn test_flag_native() {
         let start_flag_col = 0;
-        // let is_rotate_col = start_flag_col;
-        // let a_col = start_flag_col + 1;
-        // let b_col = start_flag_col + 2;
-        // let filtered_bit_col = start_flag_col + 3;
-        // let bit_col = start_flag_col + 4;
-        let start_limbs = start_flag_col + 5;
+        // let is_final = start_flag_col;
+        // let is_rotate_col = start_flag_col + 1;
+        // let a_col = start_flag_col + 2;
+        // let b_col = start_flag_col + 3;
+        let filtered_bit_col = start_flag_col + 4;
+        // let bit_col = start_flag_col + 5;
+        // let start_limbs = start_flag_col + 6;
         // let end_limbs = start_limbs + NUM_INPUT_LIMBS;
 
         let input_limbs: [u32; NUM_INPUT_LIMBS] = rand::random();
-        let mut lv = vec![F::ZERO; 5 + NUM_INPUT_LIMBS];
+        let mut lv = vec![F::ZERO; MAIN_COLS];
 
         let num_rows = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
         generate_flags_first_row(&mut lv, 0, input_limbs);
         let mut rows = vec![lv.clone()];
         for i in 0..num_rows - 1 {
-            let mut nv = vec![F::ZERO; 5 + NUM_INPUT_LIMBS];
+            let mut nv = vec![F::ZERO; MAIN_COLS];
             generate_flags_next_row(&lv, &mut nv, i, start_flag_col);
             rows.push(nv.clone());
             lv = nv;
@@ -322,7 +350,6 @@ mod tests {
         assert!(rows.len() == num_rows);
 
         // assertions
-        let filtered_bit_col = start_flag_col + 4;
         let mut filtered_bits = vec![];
         for cur_row in (0..num_rows).step_by(2) {
             filtered_bits.push(rows[cur_row][filtered_bit_col]);
@@ -339,12 +366,13 @@ mod tests {
 
         assert!(bits == filtered_bits);
 
-        for row in rows {
-            dbg!(&row[start_limbs]);
-        }
+        // for row in rows {
+        //     dbg!(&row[start_limbs]);
+        // }
     }
 
-    const COLUMNS: usize = 5 + NUM_INPUT_LIMBS;
+    const MAIN_COLS: usize = 6 + NUM_INPUT_LIMBS;
+    const COLUMNS: usize = MAIN_COLS;
     const PUBLIC_INPUTS: usize = 0;
 
     #[derive(Clone, Copy)]
@@ -359,18 +387,31 @@ mod tests {
             }
         }
 
-        pub fn generate_trace(&self) -> Vec<PolynomialValues<F>> {
-            let input_limbs: [u32; NUM_INPUT_LIMBS] = rand::random();
-            let mut lv = vec![F::ZERO; 5 + NUM_INPUT_LIMBS];
-            let num_rows = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
+        pub fn generate_trace_rows_for_one_block(
+            &self,
+            input_limbs: [u32; NUM_INPUT_LIMBS],
+        ) -> Vec<Vec<F>> {
             let start_flag_col = 0;
+            let mut lv = vec![F::ZERO; MAIN_COLS];
+            let num_rows = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
             generate_flags_first_row(&mut lv, 0, input_limbs);
             let mut rows = vec![lv.clone()];
             for i in 0..num_rows - 1 {
-                let mut nv = vec![F::ZERO; 5 + NUM_INPUT_LIMBS];
+                let mut nv = vec![F::ZERO; lv.len()];
                 generate_flags_next_row(&lv, &mut nv, i, start_flag_col);
                 rows.push(nv.clone());
                 lv = nv;
+            }
+            rows
+        }
+
+        pub fn generate_trace(
+            &self,
+            inputs: Vec<[u32; NUM_INPUT_LIMBS]>,
+        ) -> Vec<PolynomialValues<F>> {
+            let mut rows = vec![];
+            for input in inputs {
+                rows.extend(self.generate_trace_rows_for_one_block(input));
             }
             let trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
             trace_cols
@@ -417,10 +458,13 @@ mod tests {
 
     #[test]
     fn test_flag_stark() {
+        let mut rng = rand::thread_rng();
+        let inputs = (0..2).map(|_| [rng.gen(); NUM_INPUT_LIMBS]).collect_vec();
+
         type S = FlagStark<F, D>;
         let inner_config = StarkConfig::standard_fast_config();
         let stark = S::new();
-        let trace = stark.generate_trace();
+        let trace = stark.generate_trace(inputs);
         let inner_proof =
             prove::<F, C, S, D>(stark, &inner_config, trace, [], &mut TimingTree::default())
                 .unwrap();
