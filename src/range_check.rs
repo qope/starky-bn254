@@ -22,13 +22,16 @@ pub fn generate_u16_range_check<F: RichField>(
     trace_cols: &mut Vec<Vec<F>>,
 ) {
     let range_max: u64 = 1 << LIMB_BITS;
-
-    assert!(trace_cols.iter().all(|col| col.len() == range_max as usize));
+    let num_rows = trace_cols[0].len() as u64;
+    assert!(trace_cols.iter().all(|col| col.len() >= range_max as usize));
 
     let mut table = vec![];
 
     for i in 0..range_max {
         table.push(F::from_canonical_u64(i));
+    }
+    for _ in range_max..num_rows {
+        table.push(F::from_canonical_u64(range_max - 1));
     }
 
     trace_cols.push(table.clone());
@@ -51,17 +54,17 @@ pub fn eval_u16_range_check<
 >(
     vars: StarkEvaluationVars<F, P, COLS, PUBLIC_INPUTS>,
     yield_constr: &mut ConstraintConsumer<P>,
-    main_col: usize,
+    start_range_check: usize,
     target_cols: Range<usize>,
 ) {
     // lookup
-    for i in (main_col + 1..main_col + 1 + 2 * target_cols.len()).step_by(2) {
+    for i in (start_range_check + 1..start_range_check + 1 + 2 * target_cols.len()).step_by(2) {
         eval_lookups(vars, yield_constr, i, i + 1); //col_perm_lo and table_perm_lo
     }
 
     // table format
-    let cur_table = vars.local_values[main_col];
-    let next_table = vars.next_values[main_col];
+    let cur_table = vars.local_values[start_range_check];
+    let next_table = vars.next_values[start_range_check];
     yield_constr.constraint_first_row(cur_table);
     let incr = next_table - cur_table;
     yield_constr.constraint_transition(incr * incr - incr);
@@ -78,17 +81,17 @@ pub fn eval_u16_range_check_circuit<
     builder: &mut CircuitBuilder<F, D>,
     vars: StarkEvaluationTargets<D, COLS, PUBLIC_INPUTS>,
     yield_constr: &mut RecursiveConstraintConsumer<F, D>,
-    main_col: usize,
+    start_lookups: usize,
     target_cols: Range<usize>,
 ) {
     // lookup
-    for i in (main_col + 1..main_col + 1 + 2 * target_cols.len()).step_by(2) {
+    for i in (start_lookups + 1..start_lookups + 1 + 2 * target_cols.len()).step_by(2) {
         eval_lookups_circuit(builder, vars, yield_constr, i, i + 1);
     }
 
     // table format
-    let cur_table = vars.local_values[main_col];
-    let next_table = vars.next_values[main_col];
+    let cur_table = vars.local_values[start_lookups];
+    let next_table = vars.next_values[start_lookups];
     yield_constr.constraint_first_row(builder, cur_table);
     let incr = builder.sub_extension(next_table, cur_table);
     let t = builder.mul_sub_extension(incr, incr, incr);
@@ -100,18 +103,18 @@ pub fn eval_u16_range_check_circuit<
     yield_constr.constraint_last_row(builder, t);
 }
 
-pub fn u16_range_check_pairs(main_col: usize, target_cols: Range<usize>) -> Vec<PermutationPair> {
+pub fn u16_range_check_pairs(start_lookups: usize, target_cols: Range<usize>) -> Vec<PermutationPair> {
     let mut pairs = vec![];
 
     for (i, pos) in target_cols.enumerate() {
         // table
         pairs.push(PermutationPair::singletons(
-            main_col,
-            main_col + 1 + 2 * i + 1,
+            start_lookups,
+            start_lookups + 1 + 2 * i + 1,
         ));
 
         // cols
-        pairs.push(PermutationPair::singletons(pos, main_col + 1 + 2 * i));
+        pairs.push(PermutationPair::singletons(pos, start_lookups + 1 + 2 * i));
     }
     pairs
 }

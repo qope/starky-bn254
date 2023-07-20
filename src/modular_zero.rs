@@ -173,11 +173,7 @@ pub fn eval_modular_zero_circuit<F: RichField + Extendable<D>, const D: usize>(
 }
 
 /// 5 * N_LIMBS - 1
-pub fn write_modulus_aux_zero<F: Copy, const NUM_COL: usize>(
-    lv: &mut [F; NUM_COL],
-    aux: &ModulusAuxZero<F>,
-    cur_col: &mut usize,
-) {
+pub fn write_modulus_aux_zero<F: Copy>(lv: &mut [F], aux: &ModulusAuxZero<F>, cur_col: &mut usize) {
     lv[*cur_col..*cur_col + N_LIMBS + 1].copy_from_slice(&aux.quot_abs);
     lv[*cur_col + N_LIMBS + 1..*cur_col + 3 * N_LIMBS].copy_from_slice(&aux.aux_input_lo);
     lv[*cur_col + 3 * N_LIMBS..*cur_col + 5 * N_LIMBS - 1].copy_from_slice(&aux.aux_input_hi);

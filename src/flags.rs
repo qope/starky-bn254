@@ -36,11 +36,11 @@ use plonky2::{
 };
 use starky::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
 
-const NUM_INPUT_LIMBS: usize = 8;
-const INPUT_LIMB_BITS: usize = 32;
+pub const NUM_INPUT_LIMBS: usize = 8;
+pub const INPUT_LIMB_BITS: usize = 32;
 
 // generate flags for the first row
-// 5 + NUM_INPUT_LIMBS cols are generated
+// 6 + NUM_INPUT_LIMBS cols are generated
 pub fn generate_flags_first_row<F: RichField>(
     lv: &mut [F],
     start_flag_col: usize,
@@ -332,14 +332,7 @@ mod tests {
     #[test]
     fn test_flag_native() {
         let start_flag_col = 0;
-        // let is_final = start_flag_col;
-        // let is_rotate_col = start_flag_col + 1;
-        // let a_col = start_flag_col + 2;
-        // let b_col = start_flag_col + 3;
         let filtered_bit_col = start_flag_col + 4;
-        // let bit_col = start_flag_col + 5;
-        // let start_limbs = start_flag_col + 6;
-        // let end_limbs = start_limbs + NUM_INPUT_LIMBS;
 
         let input_limbs: [u32; NUM_INPUT_LIMBS] = rand::random();
         let mut lv = vec![F::ZERO; MAIN_COLS];
@@ -371,10 +364,6 @@ mod tests {
         }
 
         assert!(bits == filtered_bits);
-
-        // for row in rows {
-        //     dbg!(&row[start_limbs]);
-        // }
     }
 
     const MAIN_COLS: usize = 6 + NUM_INPUT_LIMBS;

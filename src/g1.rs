@@ -74,6 +74,53 @@ impl<F: RichField + Default> Default for G1Output<F> {
     }
 }
 
+/// total: 20*N_LIMBS
+/// range_check: 20*N_LIMBS - 3
+pub fn write_g1output<F: Copy>(lv: &mut [F], output: &G1Output<F>, cur_col: &mut usize) {
+    write_u256(lv, &output.lambda, cur_col); // N_LIMBS
+    write_u256(lv, &output.new_x, cur_col); // N_LIMBS
+    write_u256(lv, &output.new_y, cur_col); // N_LIMBS
+    write_modulus_aux_zero(lv, &output.aux_zero, cur_col); // 5*N_LIMBS - 1
+                                                           // 12*N_LIMBS - 2
+    write_modulus_aux(lv, &output.aux_x, cur_col);
+    write_modulus_aux(lv, &output.aux_y, cur_col);
+    // 3
+    lv[*cur_col] = output.quot_sign_zero;
+    *cur_col += 1;
+    lv[*cur_col] = output.quot_sign_x;
+    *cur_col += 1;
+    lv[*cur_col] = output.quot_sign_y;
+    *cur_col += 1;
+}
+
+/// total: 20*N_LIMBS
+/// range_check: 20*N_LIMBS - 3
+pub fn read_g1output<F: Copy + core::fmt::Debug>(lv: &[F], cur_col: &mut usize) -> G1Output<F> {
+    let lambda = read_u256(lv, cur_col);
+    let new_x = read_u256(lv, cur_col);
+    let new_y = read_u256(lv, cur_col);
+    let aux_zero = read_modulus_aux_zero(lv, cur_col);
+    let aux_x = read_modulus_aux(lv, cur_col);
+    let aux_y = read_modulus_aux(lv, cur_col);
+    let quot_sign_zero = lv[*cur_col];
+    *cur_col += 1;
+    let quot_sign_x = lv[*cur_col];
+    *cur_col += 1;
+    let quot_sign_y = lv[*cur_col];
+    *cur_col += 1;
+    G1Output {
+        lambda,
+        new_x,
+        new_y,
+        aux_zero,
+        aux_x,
+        aux_y,
+        quot_sign_zero,
+        quot_sign_x,
+        quot_sign_y,
+    }
+}
+
 pub fn generate_g1_add<F: RichField>(
     a_x: [F; N_LIMBS],
     a_y: [F; N_LIMBS],
@@ -475,23 +522,8 @@ impl<F: RichField + Extendable<D>, const D: usize> G1Stark<F, D> {
             write_u256(&mut lv, &a_y, &mut cur_col); // N_LIMBS
             write_u256(&mut lv, &b_x, &mut cur_col); // N_LIMBS
             write_u256(&mut lv, &b_y, &mut cur_col); // N_LIMBS
-            write_u256(&mut lv, &output.lambda, &mut cur_col); // N_LIMBS
-            write_u256(&mut lv, &output.new_x, &mut cur_col); // N_LIMBS
-            write_u256(&mut lv, &output.new_y, &mut cur_col); // N_LIMBS
-
-            // 5*N_LIMBS - 1
-            write_modulus_aux_zero(&mut lv, &output.aux_zero, &mut cur_col);
-            // 12*N_LIMBS - 2
-            write_modulus_aux(&mut lv, &output.aux_x, &mut cur_col);
-            write_modulus_aux(&mut lv, &output.aux_y, &mut cur_col);
-            // 3
-            lv[cur_col] = output.quot_sign_zero;
-            cur_col += 1;
-            lv[cur_col] = output.quot_sign_x;
-            cur_col += 1;
-            lv[cur_col] = output.quot_sign_y;
-            cur_col += 1;
-            // filter, 1
+            write_g1output(&mut lv, &output, &mut cur_col); // 20*N_LIMBS
+                                                            // filter, 1
             lv[cur_col] = is_add;
             cur_col += 1;
 
@@ -543,19 +575,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1Stark<F, D>
         let a_y = read_u256(&lv, &mut cur_col);
         let b_x = read_u256(&lv, &mut cur_col);
         let b_y = read_u256(&lv, &mut cur_col);
-        let lambda = read_u256(&lv, &mut cur_col);
-        let new_x = read_u256(&lv, &mut cur_col);
-        let new_y = read_u256(&lv, &mut cur_col);
-        let aux_zero = read_modulus_aux_zero(&lv, &mut cur_col);
-        let aux_x = read_modulus_aux(&lv, &mut cur_col);
-        let aux_y = read_modulus_aux(&lv, &mut cur_col);
-
-        let quot_sign_zero = lv[cur_col];
-        cur_col += 1;
-        let quot_sign_x = lv[cur_col];
-        cur_col += 1;
-        let quot_sign_y = lv[cur_col];
-        cur_col += 1;
+        let output = read_g1output(&lv, &mut cur_col);
 
         let is_add = lv[cur_col];
         cur_col += 1;
@@ -563,17 +583,6 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1Stark<F, D>
         cur_col += 1;
         assert!(cur_col == MAIN_COLS);
 
-        let output = G1Output {
-            lambda,
-            new_x,
-            new_y,
-            aux_zero,
-            aux_x,
-            aux_y,
-            quot_sign_zero,
-            quot_sign_x,
-            quot_sign_y,
-        };
         eval_g1_add(yield_constr, is_add, a_x, a_y, b_x, b_y, &output);
         eval_g1_double(yield_constr, is_double, a_x, a_y, &output);
     }
@@ -599,37 +608,13 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1Stark<F, D>
         let a_y = read_u256(&lv, &mut cur_col);
         let b_x = read_u256(&lv, &mut cur_col);
         let b_y = read_u256(&lv, &mut cur_col);
-        let lambda = read_u256(&lv, &mut cur_col);
-        let new_x = read_u256(&lv, &mut cur_col);
-        let new_y = read_u256(&lv, &mut cur_col);
-        let aux_zero = read_modulus_aux_zero(&lv, &mut cur_col);
-        let aux_x = read_modulus_aux(&lv, &mut cur_col);
-        let aux_y = read_modulus_aux(&lv, &mut cur_col);
-
-        let quot_sign_zero = lv[cur_col];
-        cur_col += 1;
-        let quot_sign_x = lv[cur_col];
-        cur_col += 1;
-        let quot_sign_y = lv[cur_col];
-        cur_col += 1;
+        let output = read_g1output(&lv, &mut cur_col);
 
         let is_add = lv[cur_col];
         cur_col += 1;
         let is_double = lv[cur_col];
         cur_col += 1;
         assert!(cur_col == MAIN_COLS);
-
-        let output = G1Output {
-            lambda,
-            new_x,
-            new_y,
-            aux_zero,
-            aux_x,
-            aux_y,
-            quot_sign_zero,
-            quot_sign_x,
-            quot_sign_y,
-        };
 
         eval_g1_add_circuit(builder, yield_constr, is_add, a_x, a_y, b_x, b_y, &output);
         eval_g1_double_circuit(builder, yield_constr, is_double, a_x, a_y, &output);

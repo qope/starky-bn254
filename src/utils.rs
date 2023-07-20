@@ -15,6 +15,15 @@ use plonky2::util::transpose;
 use crate::constants::{LIMB_BITS, N_LIMBS};
 use crate::native::MyFq12;
 
+pub fn u32_digits_to_biguint(inputs: &[u32]) -> BigUint {
+    let mut bits = vec![];
+    for limb in inputs {
+        let limb_bits = limb.view_bits::<Lsb0>().iter().map(|b| *b).collect_vec();
+        bits.extend(limb_bits);
+    }
+    bits_to_biguint(&bits)
+}
+
 pub fn biguint_to_bits(x: &BigUint, len: usize) -> Vec<bool> {
     let limbs = x.to_bytes_le();
     let mut bits = vec![];

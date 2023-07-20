@@ -261,11 +261,7 @@ pub fn eval_modular_op_circuit<F: RichField + Extendable<D>, const D: usize>(
 }
 
 /// N_LIMBS
-pub fn write_u256<F: Copy, const NUM_COL: usize>(
-    lv: &mut [F; NUM_COL],
-    input: &[F; N_LIMBS],
-    cur_col: &mut usize,
-) {
+pub fn write_u256<F: Copy>(lv: &mut [F], input: &[F; N_LIMBS], cur_col: &mut usize) {
     lv[*cur_col..*cur_col + N_LIMBS].copy_from_slice(input);
     *cur_col += N_LIMBS;
 }
@@ -278,11 +274,7 @@ pub fn read_u256<F: Clone + fmt::Debug>(lv: &[F], cur_col: &mut usize) -> [F; N_
 }
 
 /// 6 * N_LIMBS - 1
-pub fn write_modulus_aux<F: Copy, const NUM_COL: usize>(
-    lv: &mut [F; NUM_COL],
-    aux: &ModulusAux<F>,
-    cur_col: &mut usize,
-) {
+pub fn write_modulus_aux<F: Copy>(lv: &mut [F], aux: &ModulusAux<F>, cur_col: &mut usize) {
     lv[*cur_col..*cur_col + N_LIMBS].copy_from_slice(&aux.out_aux_red);
     lv[*cur_col + N_LIMBS..*cur_col + 2 * N_LIMBS + 1].copy_from_slice(&aux.quot_abs);
     lv[*cur_col + 2 * N_LIMBS + 1..*cur_col + 4 * N_LIMBS].copy_from_slice(&aux.aux_input_lo);

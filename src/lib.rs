@@ -13,7 +13,6 @@ pub mod lookup;
 pub mod modular;
 pub mod modular_zero;
 pub mod native;
-pub mod new_g1_exp;
 pub mod pulse;
 pub mod range_check;
 pub mod utils;

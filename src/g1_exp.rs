@@ -1,3 +1,22 @@
+//    a      |      b      |   output   |  flags   | rotate_witness |  io_pulses   |     lookups        |
+// 2*N_LIMBS |  2*N_LIMBS  | 20*N_LIMBS |   14     |       2        |  1+4*NUM_IO  | 1+2*(20*N_LIMBS-3) |
+//<------------------------------------------------>main_cols: 24*N_LIMBS + 14
+//                          <--------->range_check(start: 4*N_LIMBS, end: 24*N_LIMBS-3))
+
+const NUM_IO: usize = 1 << 7;
+const PUBLIC_INPUTS: usize = 0;
+const COLUMNS: usize = START_LOOKUPS + 1 + 2 * NUM_RANGE_CHECK;
+
+const MAIN_COLS: usize = 24 * N_LIMBS + 14;
+const START_FLAGS: usize = 24 * N_LIMBS;
+const IS_FINAL_COL: usize = START_FLAGS;
+const START_IO_PULSES: usize = START_FLAGS + 16;
+const START_LOOKUPS: usize = START_IO_PULSES + 1 + 4 * NUM_IO;
+
+const START_RANGE_CHECK: usize = 4 * N_LIMBS;
+const NUM_RANGE_CHECK: usize = 20 * N_LIMBS - 3;
+const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECK;
+
 use core::marker::PhantomData;
 
 use ark_bn254::{Fr, G1Affine};
@@ -12,25 +31,6 @@ use plonky2::{
     plonk::circuit_builder::CircuitBuilder,
     util::transpose,
 };
-
-use crate::instruction::{
-    eval_pow_instruction, eval_pow_instruction_cirucuit, fq_equal_first, fq_equal_first_circuit,
-    fq_equal_last, fq_equal_last_circuit, fq_equal_transition, fq_equal_transition_circuit,
-    generate_initial_pow_instruction, generate_next_pow_instruction,
-};
-use crate::modular::write_modulus_aux;
-use crate::modular_zero::write_modulus_aux_zero;
-use crate::range_check::{eval_split_u16_range_check, eval_split_u16_range_check_circuit};
-use crate::utils::{columns_to_fq, fq_to_columns};
-use crate::{constants::BITS_LEN, constants::N_LIMBS, utils::bits_to_biguint};
-use crate::{
-    g1::{
-        eval_g1_add, eval_g1_add_circuit, eval_g1_double, eval_g1_double_circuit, generate_g1_add,
-        generate_g1_double, G1Output,
-    },
-    instruction::read_instruction,
-};
-
 use starky::{
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
     permutation::PermutationPair,
@@ -38,24 +38,107 @@ use starky::{
     vars::{StarkEvaluationTargets, StarkEvaluationVars},
 };
 
-use super::modular_zero::read_modulus_aux_zero;
-use super::range_check::{generate_split_u16_range_check, split_u16_range_check_pairs};
-use super::{modular::read_u256, utils::i64_to_column_positive};
-use crate::modular::{read_modulus_aux, write_u256};
+use crate::{
+    constants::N_LIMBS,
+    flags::{
+        eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
+        INPUT_LIMB_BITS, NUM_INPUT_LIMBS,
+    },
+    g1::{
+        eval_g1_add, eval_g1_add_circuit, eval_g1_double, eval_g1_double_circuit, generate_g1_add,
+        generate_g1_double, read_g1output, write_g1output, G1Output,
+    },
+    instruction::{fq_equal_transition, fq_equal_transition_circuit},
+    modular::{read_u256, write_u256},
+    pulse::{
+        eval_periodic_pulse, eval_periodic_pulse_circuit, eval_pulse, eval_pulse_circuit,
+        generate_periodic_pulse_witness, generate_pulse,
+    },
+    range_check::{
+        eval_u16_range_check, eval_u16_range_check_circuit, generate_u16_range_check,
+        u16_range_check_pairs,
+    },
+    utils::{columns_to_fq, fq_to_columns, u32_digits_to_biguint},
+};
 
-const MAIN_COLS: usize = 24 * N_LIMBS + 2 + BITS_LEN;
-const ROWS: usize = 1 << 9;
+pub fn get_pulse_positions() -> Vec<usize> {
+    let num_rows_per_block = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
+    let mut pulse_positions = vec![];
+    for i in 0..NUM_IO {
+        pulse_positions.extend(vec![
+            i * num_rows_per_block,
+            i * num_rows_per_block + num_rows_per_block - 1,
+        ]);
+    }
+    pulse_positions
+}
 
-const IS_SQ_COL: usize = 24 * N_LIMBS;
-const IS_NOOP_COL: usize = 24 * N_LIMBS + 1;
-const IS_MUL_COL: usize = 24 * N_LIMBS + 2;
+pub fn generate_g1_exp_first_row<F: RichField>(
+    lv: &mut [F],
+    start_flag_col: usize,
+    x: G1Affine,
+    offset: G1Affine,
+) {
+    let is_add_col = start_flag_col + 4;
+    let a = x;
+    let b = offset;
+    let a_x = fq_to_columns(a.x).map(|x| F::from_canonical_i64(x));
+    let a_y = fq_to_columns(a.y).map(|x| F::from_canonical_i64(x));
+    let b_x = fq_to_columns(b.x).map(|x| F::from_canonical_i64(x));
+    let b_y = fq_to_columns(b.y).map(|x| F::from_canonical_i64(x));
+    let is_add = lv[is_add_col];
+    let output = if is_add == F::ONE {
+        generate_g1_add(a_x, a_y, b_x, b_y)
+    } else {
+        G1Output::default()
+    };
+    let mut cur_col = 0;
+    write_u256(lv, &a_x, &mut cur_col);
+    write_u256(lv, &a_y, &mut cur_col);
+    write_u256(lv, &b_x, &mut cur_col);
+    write_u256(lv, &b_y, &mut cur_col);
+    write_g1output(lv, &output, &mut cur_col);
+}
 
-const START_RANGE_CHECK: usize = 4 * N_LIMBS;
-const NUM_RANGE_CHECKS: usize = 20 * N_LIMBS - 4;
-const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECKS;
+pub fn generate_g1_exp_next_row<F: RichField>(lv: &[F], nv: &mut [F], start_flag_col: usize) {
+    let is_double_col = start_flag_col + 2;
+    let is_add_col = start_flag_col + 4;
 
-const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECKS;
-const PUBLIC_INPUTS: usize = 6 * N_LIMBS + BITS_LEN;
+    let mut cur_col = 0;
+    let a_x = read_u256(lv, &mut cur_col);
+    let a_y = read_u256(lv, &mut cur_col);
+    let b_x = read_u256(lv, &mut cur_col);
+    let b_y = read_u256(lv, &mut cur_col);
+    let output = read_g1output(lv, &mut cur_col);
+    let is_double = lv[is_double_col];
+    let is_add = lv[is_add_col];
+    let next_is_double = nv[is_double_col];
+    let next_is_add = nv[is_add_col];
+
+    // calc next a, b
+    let (next_a_x, next_a_y, next_b_x, next_b_y) = if is_double == F::ONE {
+        (output.new_x, output.new_y, b_x, b_y)
+    } else if is_add == F::ONE {
+        (a_x, a_y, output.new_x, output.new_y)
+    } else {
+        (a_x, a_y, b_x, b_y)
+    };
+
+    // calc next output
+    let next_output = if next_is_double == F::ONE {
+        generate_g1_double(next_a_x, next_a_y)
+    } else if next_is_add == F::ONE {
+        generate_g1_add(next_a_x, next_a_y, next_b_x, next_b_y)
+    } else {
+        G1Output::default()
+    };
+    cur_col = 0;
+    write_u256(nv, &next_a_x, &mut cur_col);
+    write_u256(nv, &next_a_y, &mut cur_col);
+    write_u256(nv, &next_b_x, &mut cur_col);
+    write_u256(nv, &next_b_y, &mut cur_col);
+    write_g1output(nv, &next_output, &mut cur_col);
+}
 
 #[derive(Clone, Copy)]
 pub struct G1ExpStark<F: RichField + Extendable<D>, const D: usize> {
@@ -69,153 +152,72 @@ impl<F: RichField + Extendable<D>, const D: usize> G1ExpStark<F, D> {
         }
     }
 
-    pub fn generate_trace(
+    pub fn generate_trace_for_one_block(
         &self,
         x: G1Affine,
         offset: G1Affine,
-        x_exp_plus_offset: G1Affine,
-        exp_bits: [bool; BITS_LEN],
-    ) -> Vec<PolynomialValues<F>> {
-        let exp_val = bits_to_biguint(&exp_bits);
-        let exp_val: Fr = exp_val.into();
-        let exp_bits = exp_bits.map(|b| F::from_bool(b));
-        let a_g1 = x;
-        let b_g1 = offset;
-        let expected: G1Affine = (a_g1 * exp_val + b_g1).into();
-        assert!(expected == x_exp_plus_offset);
-
-        let a_x = fq_to_columns(a_g1.x).map(|x| F::from_canonical_i64(x));
-        let a_y = fq_to_columns(a_g1.y).map(|x| F::from_canonical_i64(x));
-        let b_x = fq_to_columns(b_g1.x).map(|x| F::from_canonical_i64(x));
-        let b_y = fq_to_columns(b_g1.y).map(|x| F::from_canonical_i64(x));
-
-        let mut lv = [F::ZERO; MAIN_COLS];
-        let mut cur_col = 0;
-        write_u256(&mut lv, &a_x, &mut cur_col);
-        write_u256(&mut lv, &a_y, &mut cur_col);
-        write_u256(&mut lv, &b_x, &mut cur_col);
-        write_u256(&mut lv, &b_y, &mut cur_col);
-
-        generate_initial_pow_instruction(&mut lv, IS_SQ_COL, IS_MUL_COL, IS_NOOP_COL, exp_bits);
-
-        let mut rows = vec![];
-        for _ in 0..ROWS {
-            let mut cur_col = 0;
-            let a_x = read_u256(&lv, &mut cur_col);
-            let a_y = read_u256(&lv, &mut cur_col);
-            let b_x = read_u256(&lv, &mut cur_col);
-            let b_y = read_u256(&lv, &mut cur_col);
-
-            let is_add = lv[IS_MUL_COL];
-            let is_double = lv[IS_SQ_COL];
-            let is_noop = lv[IS_NOOP_COL];
-
-            assert!(is_add + is_double + is_noop == F::ONE);
-
-            let output = if is_add == F::ONE {
-                generate_g1_add(a_x, a_y, b_x, b_y)
-            } else if is_double == F::ONE {
-                generate_g1_double(a_x, a_y)
-            } else {
-                G1Output::default()
-            };
-
-            cur_col = 4 * N_LIMBS;
-            write_u256(&mut lv, &output.lambda, &mut cur_col); // N_LIMBS
-            write_u256(&mut lv, &output.new_x, &mut cur_col); // N_LIMBS
-            write_u256(&mut lv, &output.new_y, &mut cur_col); // N_LIMBS
-
-            // 5*N_LIMBS - 1
-            write_modulus_aux_zero(&mut lv, &output.aux_zero, &mut cur_col);
-            // 12*N_LIMBS - 2
-            write_modulus_aux(&mut lv, &output.aux_x, &mut cur_col);
-            write_modulus_aux(&mut lv, &output.aux_y, &mut cur_col);
-            // 3
-            lv[cur_col] = output.quot_sign_zero;
-            cur_col += 1;
-            lv[cur_col] = output.quot_sign_x;
-            cur_col += 1;
-            lv[cur_col] = output.quot_sign_y;
-            cur_col += 1;
-            assert!(cur_col == 24 * N_LIMBS);
-
-            // next row
-            let mut nv = [F::ZERO; MAIN_COLS];
-            cur_col = 0;
-            if is_double == F::ONE {
-                write_u256(&mut nv, &output.new_x, &mut cur_col);
-                write_u256(&mut nv, &output.new_y, &mut cur_col);
-                write_u256(&mut nv, &b_x, &mut cur_col);
-                write_u256(&mut nv, &b_y, &mut cur_col);
-            } else if is_add == F::ONE {
-                write_u256(&mut nv, &a_x, &mut cur_col);
-                write_u256(&mut nv, &a_y, &mut cur_col);
-                write_u256(&mut nv, &output.new_x, &mut cur_col);
-                write_u256(&mut nv, &output.new_y, &mut cur_col);
-            } else {
-                write_u256(&mut nv, &a_x, &mut cur_col);
-                write_u256(&mut nv, &a_y, &mut cur_col);
-                write_u256(&mut nv, &b_x, &mut cur_col);
-                write_u256(&mut nv, &b_y, &mut cur_col);
-            }
-
-            generate_next_pow_instruction(&lv, &mut nv, IS_SQ_COL, IS_MUL_COL, IS_NOOP_COL);
-
-            rows.push(lv);
+        exp_val: [u32; NUM_INPUT_LIMBS],
+    ) -> (G1Affine, Vec<Vec<F>>) {
+        let num_rows = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
+        let mut lv = vec![F::ZERO; MAIN_COLS];
+        generate_flags_first_row(&mut lv, START_FLAGS, exp_val);
+        generate_g1_exp_first_row(&mut lv, START_FLAGS, x, offset);
+        let mut rows = vec![lv.clone()];
+        for i in 0..num_rows - 1 {
+            let mut nv = vec![F::ZERO; lv.len()];
+            generate_flags_next_row(&lv, &mut nv, i, START_FLAGS);
+            generate_g1_exp_next_row(&lv, &mut nv, START_FLAGS);
+            rows.push(nv.clone());
             lv = nv;
         }
+        let output = {
+            let last_row = rows.last().unwrap();
+            let mut cur_col = 2 * N_LIMBS;
+            let b_x = read_u256(last_row, &mut cur_col);
+            let b_y = read_u256(last_row, &mut cur_col);
+            let b_x_fq = columns_to_fq(&b_x);
+            let b_y_fq = columns_to_fq(&b_y);
+            G1Affine::new(b_x_fq, b_y_fq)
+        };
+        // assertion
+        let exp_val_fr: Fr = u32_digits_to_biguint(&exp_val).into();
+        let expected: G1Affine = (x * exp_val_fr + offset).into();
+        assert!(output == expected);
 
-        cur_col = 2 * N_LIMBS;
-        let b_x = read_u256(&lv, &mut cur_col);
-        let b_y = read_u256(&lv, &mut cur_col);
-        let b_x_fq = columns_to_fq(&b_x);
-        let b_y_fq = columns_to_fq(&b_y);
-        let result = G1Affine::new(b_x_fq, b_y_fq);
-        assert!(result == expected);
+        (output, rows)
+    }
 
+    pub fn generate_trace(
+        &self,
+        offset: G1Affine,
+        inputs: Vec<(G1Affine, [u32; NUM_INPUT_LIMBS])>,
+    ) -> Vec<PolynomialValues<F>> {
+        assert!(inputs.len() == NUM_IO);
+
+        let mut rows = vec![];
+        let mut offset = offset;
+        for input in inputs.clone() {
+            let (output, row) = self.generate_trace_for_one_block(input.0, offset, input.1);
+            offset = output;
+            rows.extend(row);
+        }
         let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
 
-        generate_split_u16_range_check(START_RANGE_CHECK..END_RANGE_CHECK, &mut trace_cols);
+        let rotation_period = 2 * INPUT_LIMB_BITS;
+        generate_periodic_pulse_witness(
+            &mut trace_cols,
+            START_FLAGS + 1,
+            rotation_period,
+            rotation_period - 2,
+        );
+
+        generate_pulse(&mut trace_cols, get_pulse_positions());
+        generate_u16_range_check(START_RANGE_CHECK..END_RANGE_CHECK, &mut trace_cols);
 
         trace_cols
             .into_iter()
             .map(|column| PolynomialValues::new(column))
             .collect()
-    }
-
-    pub fn generate_public_inputs(
-        x: G1Affine,
-        x_exp: G1Affine,
-        offset: G1Affine,
-        exp_bits: [bool; BITS_LEN],
-    ) -> [F; 6 * N_LIMBS + BITS_LEN] {
-        let mut pi = [F::ZERO; 6 * N_LIMBS + BITS_LEN];
-        let x_columns = fq_to_columns(x.x);
-        let y_columns = fq_to_columns(x.y);
-        let x_exp_x_columns = fq_to_columns(x_exp.x);
-        let x_exp_y_columns = fq_to_columns(x_exp.y);
-        let offset_x_columns = fq_to_columns(offset.x);
-        let offset_y_columns = fq_to_columns(offset.y);
-        let x_f = i64_to_column_positive(x_columns);
-        let y_f = i64_to_column_positive(y_columns);
-        let x_exp_x_f = i64_to_column_positive(x_exp_x_columns);
-        let x_exp_y_f = i64_to_column_positive(x_exp_y_columns);
-        let offset_x_f = i64_to_column_positive(offset_x_columns);
-        let offset_y_f = i64_to_column_positive(offset_y_columns);
-        let exp_bits_f = exp_bits.map(|b| F::from_bool(b));
-        let mut cur_col = 0;
-        write_u256(&mut pi, &x_f, &mut cur_col);
-        write_u256(&mut pi, &y_f, &mut cur_col);
-        write_u256(&mut pi, &offset_x_f, &mut cur_col);
-        write_u256(&mut pi, &offset_y_f, &mut cur_col);
-        write_u256(&mut pi, &x_exp_x_f, &mut cur_col);
-        write_u256(&mut pi, &x_exp_y_f, &mut cur_col);
-        for i in 0..BITS_LEN {
-            pi[cur_col] = exp_bits_f[i];
-            cur_col += 1;
-        }
-        assert!(cur_col == 6 * N_LIMBS + BITS_LEN);
-        pi
     }
 }
 
@@ -231,104 +233,125 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F,
         FE: FieldExtension<D2, BaseField = F>,
         P: PackedField<Scalar = FE>,
     {
-        eval_split_u16_range_check(
-            vars,
-            yield_constr,
-            MAIN_COLS,
-            START_RANGE_CHECK..END_RANGE_CHECK,
-        );
+        let is_final_col = IS_FINAL_COL;
+        let is_double_col = START_FLAGS + 2;
+        let is_add_col = START_FLAGS + 4;
 
         let lv = vars.local_values;
+        let nv = vars.next_values;
 
         let mut cur_col = 0;
         let a_x = read_u256(lv, &mut cur_col);
         let a_y = read_u256(lv, &mut cur_col);
         let b_x = read_u256(lv, &mut cur_col);
         let b_y = read_u256(lv, &mut cur_col);
-        let lambda = read_u256(lv, &mut cur_col);
-        let new_x = read_u256(lv, &mut cur_col);
-        let new_y = read_u256(lv, &mut cur_col);
-        let aux_zero = read_modulus_aux_zero(lv, &mut cur_col);
-        let aux_x = read_modulus_aux(lv, &mut cur_col);
-        let aux_y = read_modulus_aux(lv, &mut cur_col);
-
-        let quot_sign_zero = lv[cur_col];
-        cur_col += 1;
-        let quot_sign_x = lv[cur_col];
-        cur_col += 1;
-        let quot_sign_y = lv[cur_col];
-        cur_col += 1;
-
-        assert!(cur_col == 24 * N_LIMBS);
-
-        let is_add = lv[IS_MUL_COL];
-        let is_double = lv[IS_SQ_COL];
-        let is_noop = lv[IS_NOOP_COL];
-
-        cur_col = IS_MUL_COL;
-        let bits: [_; BITS_LEN] = read_instruction(lv, &mut cur_col);
-
-        // assert!(cur_col == MAIN_COLS);
-        let output = G1Output {
-            lambda,
-            new_x,
-            new_y,
-            aux_zero,
-            aux_x,
-            aux_y,
-            quot_sign_zero,
-            quot_sign_x,
-            quot_sign_y,
-        };
-        eval_g1_add(yield_constr, is_add, a_x, a_y, b_x, b_y, &output);
-        eval_g1_double(yield_constr, is_double, a_x, a_y, &output);
-
-        // public inputs
-        let pi = vars.public_inputs;
-        let pi: [P; PUBLIC_INPUTS] = pi.map(|x| x.into());
-        cur_col = 0;
-        let pi_a_x = read_u256(&pi, &mut cur_col);
-        let pi_a_y = read_u256(&pi, &mut cur_col);
-        let pi_b_x = read_u256(&pi, &mut cur_col);
-        let pi_b_y = read_u256(&pi, &mut cur_col);
-        let pi_final_x = read_u256(&pi, &mut cur_col);
-        let pi_final_y = read_u256(&pi, &mut cur_col);
-        let pi_bits: [_; BITS_LEN] = read_instruction(&pi, &mut cur_col);
-        fq_equal_first(yield_constr, pi_a_x, a_x);
-        fq_equal_first(yield_constr, pi_a_y, a_y);
-        fq_equal_first(yield_constr, pi_b_x, b_x);
-        fq_equal_first(yield_constr, pi_b_y, b_y);
-        fq_equal_last(yield_constr, pi_final_x, b_x);
-        fq_equal_last(yield_constr, pi_final_y, b_y);
-        for i in 0..BITS_LEN {
-            yield_constr.constraint_first_row(pi_bits[i] - bits[i]);
-        }
+        let output = read_g1output(lv, &mut cur_col);
+        let is_add = lv[is_add_col];
+        let is_double = lv[is_double_col];
+        let is_final = lv[is_final_col];
+        let is_not_final = P::ONES - is_final;
 
         // transition
-        let nv = vars.next_values;
-        let mut cur_col = 0;
+        cur_col = 0;
         let next_a_x = read_u256(nv, &mut cur_col);
         let next_a_y = read_u256(nv, &mut cur_col);
         let next_b_x = read_u256(nv, &mut cur_col);
         let next_b_y = read_u256(nv, &mut cur_col);
+        // if is_double==F::ONE
+        {
+            fq_equal_transition(
+                yield_constr,
+                is_not_final * is_double,
+                &next_a_x,
+                &output.new_x,
+            );
+            fq_equal_transition(
+                yield_constr,
+                is_not_final * is_double,
+                &next_a_y,
+                &output.new_y,
+            );
+            fq_equal_transition(yield_constr, is_not_final * is_double, &next_b_x, &b_x);
+            fq_equal_transition(yield_constr, is_not_final * is_double, &next_b_y, &b_y);
+        }
+        // if is_add==F::ONE
+        {
+            fq_equal_transition(yield_constr, is_not_final * is_add, &next_a_x, &a_x);
+            fq_equal_transition(yield_constr, is_not_final * is_add, &next_a_y, &a_y);
+            fq_equal_transition(
+                yield_constr,
+                is_not_final * is_add,
+                &next_b_x,
+                &output.new_x,
+            );
+            fq_equal_transition(
+                yield_constr,
+                is_not_final * is_add,
+                &next_b_y,
+                &output.new_y,
+            );
+        }
+        // else
+        {
+            let is_double_nor_add = P::ONES - is_double - is_add;
+            fq_equal_transition(
+                yield_constr,
+                is_not_final * is_double_nor_add,
+                &next_a_x,
+                &a_x,
+            );
+            fq_equal_transition(
+                yield_constr,
+                is_not_final * is_double_nor_add,
+                &next_a_y,
+                &a_y,
+            );
+            fq_equal_transition(
+                yield_constr,
+                is_not_final * is_double_nor_add,
+                &next_b_x,
+                &b_x,
+            );
+            fq_equal_transition(
+                yield_constr,
+                is_not_final * is_double_nor_add,
+                &next_b_y,
+                &b_y,
+            );
+        }
+        eval_flags(yield_constr, lv, nv, START_FLAGS);
+        eval_g1_add(yield_constr, is_add, a_x, a_y, b_x, b_y, &output);
+        eval_g1_double(yield_constr, is_double, a_x, a_y, &output);
 
-        // if is_double
-        fq_equal_transition(yield_constr, is_double, &next_a_x, &new_x);
-        fq_equal_transition(yield_constr, is_double, &next_a_y, &new_y);
-        fq_equal_transition(yield_constr, is_double, &next_b_x, &b_x);
-        fq_equal_transition(yield_constr, is_double, &next_b_y, &b_y);
-        // if is_add
-        fq_equal_transition(yield_constr, is_add, &next_a_x, &a_x);
-        fq_equal_transition(yield_constr, is_add, &next_a_y, &a_y);
-        fq_equal_transition(yield_constr, is_add, &next_b_x, &new_x);
-        fq_equal_transition(yield_constr, is_add, &next_b_y, &new_y);
-        // if is_noop
-        fq_equal_transition(yield_constr, is_noop, &next_a_x, &a_x);
-        fq_equal_transition(yield_constr, is_noop, &next_a_y, &a_y);
-        fq_equal_transition(yield_constr, is_noop, &next_b_x, &b_x);
-        fq_equal_transition(yield_constr, is_noop, &next_b_y, &b_y);
-
-        eval_pow_instruction(yield_constr, lv, nv, IS_SQ_COL, IS_MUL_COL, IS_NOOP_COL);
+        // flags, pulses, and lookup
+        eval_flags(
+            yield_constr,
+            vars.local_values,
+            vars.next_values,
+            START_FLAGS,
+        );
+        eval_periodic_pulse(
+            yield_constr,
+            vars.local_values,
+            vars.next_values,
+            START_FLAGS + 1,
+            MAIN_COLS,
+            2 * INPUT_LIMB_BITS,
+            2 * INPUT_LIMB_BITS - 2,
+        );
+        eval_pulse(
+            yield_constr,
+            vars.local_values,
+            vars.next_values,
+            MAIN_COLS + 2,
+            get_pulse_positions(),
+        );
+        eval_u16_range_check(
+            vars,
+            yield_constr,
+            START_LOOKUPS,
+            START_RANGE_CHECK..END_RANGE_CHECK,
+        );
     }
 
     fn eval_ext_circuit(
@@ -337,111 +360,166 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F,
         vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
         yield_constr: &mut RecursiveConstraintConsumer<F, D>,
     ) {
-        eval_split_u16_range_check_circuit(
-            builder,
-            vars,
-            yield_constr,
-            MAIN_COLS,
-            START_RANGE_CHECK..END_RANGE_CHECK,
-        );
+        let one = builder.one_extension();
+        let is_final_col = IS_FINAL_COL;
+        let is_double_col = START_FLAGS + 2;
+        let is_add_col = START_FLAGS + 4;
 
         let lv = vars.local_values;
+        let nv = vars.next_values;
 
         let mut cur_col = 0;
         let a_x = read_u256(lv, &mut cur_col);
         let a_y = read_u256(lv, &mut cur_col);
         let b_x = read_u256(lv, &mut cur_col);
         let b_y = read_u256(lv, &mut cur_col);
-        let lambda = read_u256(lv, &mut cur_col);
-        let new_x = read_u256(lv, &mut cur_col);
-        let new_y = read_u256(lv, &mut cur_col);
-        let aux_zero = read_modulus_aux_zero(lv, &mut cur_col);
-        let aux_x = read_modulus_aux(lv, &mut cur_col);
-        let aux_y = read_modulus_aux(lv, &mut cur_col);
-
-        let quot_sign_zero = lv[cur_col];
-        cur_col += 1;
-        let quot_sign_x = lv[cur_col];
-        cur_col += 1;
-        let quot_sign_y = lv[cur_col];
-        cur_col += 1;
-
-        assert!(cur_col == 24 * N_LIMBS);
-        cur_col = IS_MUL_COL;
-        let bits: [_; BITS_LEN] = read_instruction(lv, &mut cur_col);
-
-        let is_add = lv[IS_MUL_COL];
-        let is_double = lv[IS_SQ_COL];
-        let is_noop = lv[IS_NOOP_COL];
-
-        // assert!(cur_col == MAIN_COLS);
-        let output = G1Output {
-            lambda,
-            new_x,
-            new_y,
-            aux_zero,
-            aux_x,
-            aux_y,
-            quot_sign_zero,
-            quot_sign_x,
-            quot_sign_y,
-        };
-        eval_g1_add_circuit(builder, yield_constr, is_add, a_x, a_y, b_x, b_y, &output);
-        eval_g1_double_circuit(builder, yield_constr, is_double, a_x, a_y, &output);
-
-        // public inputs
-        let pi = vars.public_inputs;
-        cur_col = 0;
-        let pi_a_x = read_u256(pi, &mut cur_col);
-        let pi_a_y = read_u256(pi, &mut cur_col);
-        let pi_b_x = read_u256(pi, &mut cur_col);
-        let pi_b_y = read_u256(pi, &mut cur_col);
-        let pi_final_x = read_u256(pi, &mut cur_col);
-        let pi_final_y = read_u256(pi, &mut cur_col);
-        let pi_bits: [_; BITS_LEN] = read_instruction(&pi, &mut cur_col);
-        fq_equal_first_circuit(builder, yield_constr, pi_a_x, a_x);
-        fq_equal_first_circuit(builder, yield_constr, pi_a_y, a_y);
-        fq_equal_first_circuit(builder, yield_constr, pi_b_x, b_x);
-        fq_equal_first_circuit(builder, yield_constr, pi_b_y, b_y);
-        fq_equal_last_circuit(builder, yield_constr, pi_final_x, b_x);
-        fq_equal_last_circuit(builder, yield_constr, pi_final_y, b_y);
-        for i in 0..BITS_LEN {
-            let diff = builder.sub_extension(pi_bits[i], bits[i]);
-            yield_constr.constraint_first_row(builder, diff);
-        }
+        let output = read_g1output(lv, &mut cur_col);
+        let is_add = lv[is_add_col];
+        let is_double = lv[is_double_col];
+        let is_final = lv[is_final_col];
+        let is_not_final = builder.sub_extension(one, is_final);
 
         // transition
-        let nv = vars.next_values;
-        let mut cur_col = 0;
+        cur_col = 0;
         let next_a_x = read_u256(nv, &mut cur_col);
         let next_a_y = read_u256(nv, &mut cur_col);
         let next_b_x = read_u256(nv, &mut cur_col);
         let next_b_y = read_u256(nv, &mut cur_col);
+        // if is_double==F::ONE
+        {
+            let is_not_final_and_double = builder.mul_extension(is_not_final, is_double);
+            fq_equal_transition_circuit(
+                builder,
+                yield_constr,
+                is_not_final_and_double,
+                &next_a_x,
+                &output.new_x,
+            );
+            fq_equal_transition_circuit(
+                builder,
+                yield_constr,
+                is_not_final_and_double,
+                &next_a_y,
+                &output.new_y,
+            );
+            fq_equal_transition_circuit(
+                builder,
+                yield_constr,
+                is_not_final_and_double,
+                &next_b_x,
+                &b_x,
+            );
+            fq_equal_transition_circuit(
+                builder,
+                yield_constr,
+                is_not_final_and_double,
+                &next_b_y,
+                &b_y,
+            );
+        }
+        // if is_add==F::ONE
+        {
+            let is_not_final_and_add = builder.mul_extension(is_not_final, is_add);
+            fq_equal_transition_circuit(
+                builder,
+                yield_constr,
+                is_not_final_and_add,
+                &next_a_x,
+                &a_x,
+            );
+            fq_equal_transition_circuit(
+                builder,
+                yield_constr,
+                is_not_final_and_add,
+                &next_a_y,
+                &a_y,
+            );
+            fq_equal_transition_circuit(
+                builder,
+                yield_constr,
+                is_not_final_and_add,
+                &next_b_x,
+                &output.new_x,
+            );
+            fq_equal_transition_circuit(
+                builder,
+                yield_constr,
+                is_not_final_and_add,
+                &next_b_y,
+                &output.new_y,
+            );
+        }
+        // else
+        {
+            let is_double_or_add = builder.add_extension(is_double, is_add);
+            let is_not_double_nor_add = builder.sub_extension(one, is_double_or_add);
+            let is_not_final_and_not_double_nor_add =
+                builder.mul_extension(is_not_final, is_not_double_nor_add);
+            fq_equal_transition_circuit(
+                builder,
+                yield_constr,
+                is_not_final_and_not_double_nor_add,
+                &next_a_x,
+                &a_x,
+            );
+            fq_equal_transition_circuit(
+                builder,
+                yield_constr,
+                is_not_final_and_not_double_nor_add,
+                &next_a_y,
+                &a_y,
+            );
+            fq_equal_transition_circuit(
+                builder,
+                yield_constr,
+                is_not_final_and_not_double_nor_add,
+                &next_b_x,
+                &b_x,
+            );
+            fq_equal_transition_circuit(
+                builder,
+                yield_constr,
+                is_not_final_and_not_double_nor_add,
+                &next_b_y,
+                &b_y,
+            );
+        }
+        eval_flags_circuit(builder, yield_constr, lv, nv, START_FLAGS);
+        eval_g1_add_circuit(builder, yield_constr, is_add, a_x, a_y, b_x, b_y, &output);
+        eval_g1_double_circuit(builder, yield_constr, is_double, a_x, a_y, &output);
 
-        // if is_double
-        fq_equal_transition_circuit(builder, yield_constr, is_double, &next_a_x, &new_x);
-        fq_equal_transition_circuit(builder, yield_constr, is_double, &next_a_y, &new_y);
-        fq_equal_transition_circuit(builder, yield_constr, is_double, &next_b_x, &b_x);
-        fq_equal_transition_circuit(builder, yield_constr, is_double, &next_b_y, &b_y);
-        // if is_add
-        fq_equal_transition_circuit(builder, yield_constr, is_add, &next_a_x, &a_x);
-        fq_equal_transition_circuit(builder, yield_constr, is_add, &next_a_y, &a_y);
-        fq_equal_transition_circuit(builder, yield_constr, is_add, &next_b_x, &new_x);
-        fq_equal_transition_circuit(builder, yield_constr, is_add, &next_b_y, &new_y);
-        // if is_noop
-        fq_equal_transition_circuit(builder, yield_constr, is_noop, &next_a_x, &a_x);
-        fq_equal_transition_circuit(builder, yield_constr, is_noop, &next_a_y, &a_y);
-        fq_equal_transition_circuit(builder, yield_constr, is_noop, &next_b_x, &b_x);
-        fq_equal_transition_circuit(builder, yield_constr, is_noop, &next_b_y, &b_y);
-
-        eval_pow_instruction_cirucuit(
+        // flags, pulses, and lookup
+        eval_flags_circuit(
             builder,
             yield_constr,
-            lv,
-            nv,
-            IS_SQ_COL,
-            IS_MUL_COL,
-            IS_NOOP_COL,
+            vars.local_values,
+            vars.next_values,
+            START_FLAGS,
+        );
+        eval_periodic_pulse_circuit(
+            builder,
+            yield_constr,
+            vars.local_values,
+            vars.next_values,
+            START_FLAGS + 1,
+            MAIN_COLS,
+            2 * INPUT_LIMB_BITS,
+            2 * INPUT_LIMB_BITS - 2,
+        );
+        eval_pulse_circuit(
+            builder,
+            yield_constr,
+            vars.local_values,
+            vars.next_values,
+            MAIN_COLS + 2,
+            get_pulse_positions(),
+        );
+        eval_u16_range_check_circuit(
+            builder,
+            vars,
+            yield_constr,
+            START_LOOKUPS,
+            START_RANGE_CHECK..END_RANGE_CHECK,
         );
     }
 
@@ -450,7 +528,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F,
     }
 
     fn permutation_pairs(&self) -> Vec<PermutationPair> {
-        split_u16_range_check_pairs(MAIN_COLS, START_RANGE_CHECK..END_RANGE_CHECK)
+        u16_range_check_pairs(START_LOOKUPS, START_RANGE_CHECK..END_RANGE_CHECK)
     }
 }
 
@@ -460,11 +538,12 @@ mod tests {
 
     use crate::{
         constants::BITS_LEN,
-        g1_exp::G1ExpStark,
+        g1_exp::{G1ExpStark, NUM_IO},
         utils::{biguint_to_bits, bits_to_biguint},
     };
     use ark_bn254::{Fr, G1Affine};
     use ark_std::UniformRand;
+    use num_bigint::BigUint;
     use plonky2::{
         iop::witness::PartialWitness,
         plonk::{
@@ -495,36 +574,30 @@ mod tests {
     }
 
     #[test]
-    fn test_g1_exp() {
+    fn test_new_g1_exp() {
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
 
         let mut rng = rand::thread_rng();
         let exp_val: Fr = Fr::rand(&mut rng);
-        let exp_bits: [bool; BITS_LEN] = biguint_to_bits(&exp_val.into(), BITS_LEN)
-            .try_into()
-            .unwrap();
+        let exp_val_biguint: BigUint = exp_val.into();
         let x = G1Affine::rand(&mut rng);
         let offset = G1Affine::rand(&mut rng);
-        let x_exp: G1Affine = (x * exp_val + offset).into();
 
         type S = G1ExpStark<F, D>;
         let inner_config = StarkConfig::standard_fast_config();
         let stark = S::new();
-        let trace = stark.generate_trace(x, offset, x_exp, exp_bits);
+        let trace = stark.generate_trace(
+            offset,
+            vec![(x, exp_val_biguint.to_u32_digits().try_into().unwrap()); NUM_IO],
+        );
 
         println!("start stark proof generation");
         let now = Instant::now();
-        let pi = S::generate_public_inputs(x, x_exp, offset, exp_bits);
-        let inner_proof = prove::<F, C, S, D>(
-            stark,
-            &inner_config,
-            trace,
-            pi.try_into().unwrap(),
-            &mut TimingTree::default(),
-        )
-        .unwrap();
+        let inner_proof =
+            prove::<F, C, S, D>(stark, &inner_config, trace, [], &mut TimingTree::default())
+                .unwrap();
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
         println!("end stark proof generation: {:?}", now.elapsed());
 
@@ -542,6 +615,6 @@ mod tests {
         let _proof = data.prove(pw).unwrap();
         println!("end plonky2 proof generation: {:?}", now.elapsed());
 
-        dbg!(degree_bits);
+        // dbg!(degree_bits);
     }
 }
