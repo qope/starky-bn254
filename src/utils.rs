@@ -145,13 +145,15 @@ pub fn fq_to_columns(x: Fq) -> [i64; N_LIMBS] {
     bigint_to_columns(&x_biguint.into())
 }
 
-pub fn fq12_to_columns(x: Fq12) -> Vec<[i64; N_LIMBS]> {
+pub fn fq12_to_columns(x: Fq12) -> [[i64; N_LIMBS]; 12] {
     let x_myfq12: MyFq12 = x.into();
     x_myfq12
         .coeffs
         .iter()
         .map(|c| fq_to_columns(c.clone()))
-        .collect()
+        .collect_vec()
+        .try_into()
+        .unwrap()
 }
 
 pub fn fq2_to_columns(x: Fq2) -> [[i64; N_LIMBS]; 2] {
@@ -172,7 +174,7 @@ pub fn columns_to_fq2<F: PrimeField64>(column: [[F; N_LIMBS]; 2]) -> Fq2 {
     Fq2::new(coeffs[0], coeffs[1])
 }
 
-pub fn columns_to_fq12<F: PrimeField64, const N: usize>(column: &Vec<[F; N]>) -> Fq12 {
+pub fn columns_to_fq12<F: PrimeField64, const N: usize>(column: [[F; N]; 12]) -> Fq12 {
     let coeffs = column
         .iter()
         .map(|column| columns_to_fq(column))

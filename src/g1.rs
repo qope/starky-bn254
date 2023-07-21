@@ -95,7 +95,7 @@ pub fn write_g1_output<F: Copy>(lv: &mut [F], output: &G1Output<F>, cur_col: &mu
 
 /// total: 20*N_LIMBS
 /// range_check: 20*N_LIMBS - 3
-pub fn read_g1output<F: Copy + core::fmt::Debug>(lv: &[F], cur_col: &mut usize) -> G1Output<F> {
+pub fn read_g1_output<F: Copy + core::fmt::Debug>(lv: &[F], cur_col: &mut usize) -> G1Output<F> {
     let lambda = read_u256(lv, cur_col);
     let new_x = read_u256(lv, cur_col);
     let new_y = read_u256(lv, cur_col);
@@ -575,7 +575,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1Stark<F, D>
         let a_y = read_u256(&lv, &mut cur_col);
         let b_x = read_u256(&lv, &mut cur_col);
         let b_y = read_u256(&lv, &mut cur_col);
-        let output = read_g1output(&lv, &mut cur_col);
+        let output = read_g1_output(&lv, &mut cur_col);
 
         let is_add = lv[cur_col];
         cur_col += 1;
@@ -608,7 +608,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1Stark<F, D>
         let a_y = read_u256(&lv, &mut cur_col);
         let b_x = read_u256(&lv, &mut cur_col);
         let b_y = read_u256(&lv, &mut cur_col);
-        let output = read_g1output(&lv, &mut cur_col);
+        let output = read_g1_output(&lv, &mut cur_col);
 
         let is_add = lv[cur_col];
         cur_col += 1;

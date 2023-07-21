@@ -46,7 +46,7 @@ use crate::{
     },
     g1::{
         eval_g1_add, eval_g1_add_circuit, eval_g1_double, eval_g1_double_circuit, generate_g1_add,
-        generate_g1_double, read_g1output, write_g1_output, G1Output,
+        generate_g1_double, read_g1_output, write_g1_output, G1Output,
     },
     instruction::{fq_equal_transition, fq_equal_transition_circuit, vec_equal, vec_equal_circuit},
     modular::{read_u256, write_u256},
@@ -155,7 +155,7 @@ pub fn generate_g1_exp_next_row<F: RichField>(lv: &[F], nv: &mut [F], start_flag
     let a_y = read_u256(lv, &mut cur_col);
     let b_x = read_u256(lv, &mut cur_col);
     let b_y = read_u256(lv, &mut cur_col);
-    let output = read_g1output(lv, &mut cur_col);
+    let output = read_g1_output(lv, &mut cur_col);
     let is_double = lv[is_double_col];
     let is_add = lv[is_add_col];
     let next_is_double = nv[is_double_col];
@@ -286,7 +286,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F,
         let a_y = read_u256(lv, &mut cur_col);
         let b_x = read_u256(lv, &mut cur_col);
         let b_y = read_u256(lv, &mut cur_col);
-        let output = read_g1output(lv, &mut cur_col);
+        let output = read_g1_output(lv, &mut cur_col);
         let is_add = lv[is_add_col];
         let is_double = lv[is_double_col];
         let is_final = lv[is_final_col];
@@ -445,7 +445,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F,
         let a_y = read_u256(lv, &mut cur_col);
         let b_x = read_u256(lv, &mut cur_col);
         let b_y = read_u256(lv, &mut cur_col);
-        let output = read_g1output(lv, &mut cur_col);
+        let output = read_g1_output(lv, &mut cur_col);
         let is_add = lv[is_add_col];
         let is_double = lv[is_double_col];
         let is_final = lv[is_final_col];
