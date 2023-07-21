@@ -262,6 +262,15 @@ impl<F: RichField + Extendable<D>, const D: usize> G2ExpStark<F, D> {
             .map(|column| PolynomialValues::new(column))
             .collect()
     }
+
+    pub fn generate_public_inputs(&self, inputs: &[G2ExpIONative]) -> [F; PUBLIC_INPUTS] {
+        inputs
+            .iter()
+            .flat_map(|input| g2_exp_io_to_columns::<F>(input))
+            .collect_vec()
+            .try_into()
+            .unwrap()
+    }
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2ExpStark<F, D> {
@@ -727,7 +736,7 @@ mod tests {
 
     use crate::{
         flags::NUM_INPUT_LIMBS,
-        g2_exp::{g2_exp_io_to_columns, G2ExpIONative, G2ExpStark, NUM_IO},
+        g2_exp::{ G2ExpIONative, G2ExpStark, NUM_IO},
         utils::u32_digits_to_biguint,
     };
     use ark_bn254::{Fr, G2Affine};
@@ -776,10 +785,6 @@ mod tests {
                 }
             })
             .collect_vec();
-        let pi = inputs
-            .iter()
-            .flat_map(|input| g2_exp_io_to_columns::<F>(input))
-            .collect_vec();
 
         type S = G2ExpStark<F, D>;
         let inner_config = StarkConfig::standard_fast_config();
@@ -788,6 +793,7 @@ mod tests {
         println!("start stark proof generation");
         let now = Instant::now();
         let trace = stark.generate_trace(&inputs);
+        let pi = stark.generate_public_inputs(&inputs);
         let inner_proof = prove::<F, C, S, D>(
             stark,
             &inner_config,

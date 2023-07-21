@@ -259,6 +259,15 @@ impl<F: RichField + Extendable<D>, const D: usize> G1ExpStark<F, D> {
             .map(|column| PolynomialValues::new(column))
             .collect()
     }
+
+    pub fn generate_public_inputs(&self, inputs: &[G1ExpIONative]) -> [F; PUBLIC_INPUTS] {
+        inputs
+            .iter()
+            .flat_map(|input| g1_exp_io_to_columns::<F>(input))
+            .collect_vec()
+            .try_into()
+            .unwrap()
+    }
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F, D> {
@@ -673,7 +682,7 @@ mod tests {
     use crate::{
         constants::BITS_LEN,
         flags::NUM_INPUT_LIMBS,
-        g1_exp::{g1_exp_io_to_columns, G1ExpIONative, G1ExpStark, NUM_IO},
+        g1_exp::{G1ExpIONative, G1ExpStark, NUM_IO},
         utils::{biguint_to_bits, bits_to_biguint, u32_digits_to_biguint},
     };
     use ark_bn254::{Fr, G1Affine};
@@ -732,10 +741,6 @@ mod tests {
                 }
             })
             .collect_vec();
-        let pi = inputs
-            .iter()
-            .flat_map(|input| g1_exp_io_to_columns::<F>(input))
-            .collect_vec();
 
         type S = G1ExpStark<F, D>;
         let inner_config = StarkConfig::standard_fast_config();
@@ -744,6 +749,7 @@ mod tests {
         println!("start stark proof generation");
         let now = Instant::now();
         let trace = stark.generate_trace(&inputs);
+        let pi = stark.generate_public_inputs(&inputs);
         let inner_proof = prove::<F, C, S, D>(
             stark,
             &inner_config,
@@ -755,10 +761,13 @@ mod tests {
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
         println!("end stark proof generation: {:?}", now.elapsed());
 
+        let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
+        dbg!(degree_bits);
+
         let circuit_config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
         let mut pw = PartialWitness::new();
-        let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
+
         let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
         set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
         verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, &pt, &inner_config);

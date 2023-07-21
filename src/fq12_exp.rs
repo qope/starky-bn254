@@ -305,6 +305,15 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
             .map(|column| PolynomialValues::new(column))
             .collect()
     }
+
+    pub fn generate_public_inputs(&self, inputs: &[Fq12ExpIONative]) -> [F; PUBLIC_INPUTS] {
+        inputs
+            .iter()
+            .flat_map(|input| fq12_exp_io_to_columns::<F>(input))
+            .collect_vec()
+            .try_into()
+            .unwrap()
+    }
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<F, D> {
@@ -596,7 +605,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
 mod tests {
     use std::time::Instant;
 
-    use crate::fq12_exp::{fq12_exp_io_to_columns, Fq12ExpIONative, Fq12ExpStark, NUM_IO};
+    use crate::fq12_exp::{Fq12ExpIONative, Fq12ExpStark, NUM_IO};
     use ark_bn254::{Fq12, Fr};
     use ark_ff::Field;
     use ark_std::UniformRand;
@@ -644,10 +653,6 @@ mod tests {
                 }
             })
             .collect_vec();
-        let pi = inputs
-            .iter()
-            .flat_map(|input| fq12_exp_io_to_columns::<F>(input))
-            .collect_vec();
 
         type S = Fq12ExpStark<F, D>;
         let inner_config = StarkConfig::standard_fast_config();
@@ -656,6 +661,7 @@ mod tests {
         println!("start stark proof generation");
         let now = Instant::now();
         let trace = stark.generate_trace(&inputs);
+        let pi = stark.generate_public_inputs(&inputs);
         let inner_proof = prove::<F, C, S, D>(
             stark,
             &inner_config,
@@ -676,6 +682,7 @@ mod tests {
         verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, &pt, &inner_config);
         let data = builder.build::<C>();
 
+        dbg!(degree_bits);
         println!("start plonky2 proof generation");
         let now = Instant::now();
         let _proof = data.prove(pw).unwrap();
