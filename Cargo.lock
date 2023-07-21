@@ -701,7 +701,7 @@ dependencies = [
 [[package]]
 name = "starky"
 version = "0.1.1"
-source = "git+https://github.com/qope/plonky2.git?branch=dev#e366412a9f7d5f5b9f2fae2f3da87e530207831e"
+source = "git+https://github.com/qope/plonky2.git?rev=e366412a#e366412a9f7d5f5b9f2fae2f3da87e530207831e"
 dependencies = [
  "anyhow",
  "itertools 0.11.0",
