@@ -1,10 +1,10 @@
 //    a      |      b      |   output   |  flags   | rotate_witness |  io_pulses   |     lookups        |
 // 2*N_LIMBS |  2*N_LIMBS  | 20*N_LIMBS |   14     |       2        |  1+4*NUM_IO  | 1+2*(20*N_LIMBS-3) |
 //<------------------------------------------------>main_cols: 24*N_LIMBS + 14
-//                          <--------->range_check(start: 4*N_LIMBS, end: 24*N_LIMBS-3))
+//<----------------------------------->range_check(start: 0, end: 24*N_LIMBS-3))
 
 const NUM_IO: usize = 1 << 7;
-const PUBLIC_INPUTS: usize = 0;
+const PUBLIC_INPUTS: usize = 7 * NUM_INPUT_LIMBS * NUM_IO;
 const COLUMNS: usize = START_LOOKUPS + 1 + 2 * NUM_RANGE_CHECK;
 
 const MAIN_COLS: usize = 24 * N_LIMBS + 14;
@@ -13,14 +13,15 @@ const IS_FINAL_COL: usize = START_FLAGS;
 const START_IO_PULSES: usize = START_FLAGS + 16;
 const START_LOOKUPS: usize = START_IO_PULSES + 1 + 4 * NUM_IO;
 
-const START_RANGE_CHECK: usize = 4 * N_LIMBS;
-const NUM_RANGE_CHECK: usize = 20 * N_LIMBS - 3;
+const START_RANGE_CHECK: usize = 0;
+const NUM_RANGE_CHECK: usize = 24 * N_LIMBS - 3;
 const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECK;
 
 use core::marker::PhantomData;
 
-use ark_bn254::{Fr, G1Affine};
+use ark_bn254::{Fq, Fr, G1Affine};
 use itertools::Itertools;
+use num_bigint::BigUint;
 use plonky2::{
     field::{
         extension::{Extendable, FieldExtension},
@@ -28,6 +29,7 @@ use plonky2::{
         polynomial::PolynomialValues,
     },
     hash::hash_types::RichField,
+    iop::ext_target::ExtensionTarget,
     plonk::circuit_builder::CircuitBuilder,
     util::transpose,
 };
@@ -39,7 +41,7 @@ use starky::{
 };
 
 use crate::{
-    constants::N_LIMBS,
+    constants::{LIMB_BITS, N_LIMBS},
     flags::{
         eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
         INPUT_LIMB_BITS, NUM_INPUT_LIMBS,
@@ -48,11 +50,11 @@ use crate::{
         eval_g1_add, eval_g1_add_circuit, eval_g1_double, eval_g1_double_circuit, generate_g1_add,
         generate_g1_double, read_g1output, write_g1output, G1Output,
     },
-    instruction::{fq_equal_transition, fq_equal_transition_circuit},
+    instruction::{fq_equal_transition, fq_equal_transition_circuit, vec_equal, vec_equal_circuit},
     modular::{read_u256, write_u256},
     pulse::{
         eval_periodic_pulse, eval_periodic_pulse_circuit, eval_pulse, eval_pulse_circuit,
-        generate_periodic_pulse_witness, generate_pulse,
+        generate_periodic_pulse_witness, generate_pulse, get_pulse_col,
     },
     range_check::{
         eval_u16_range_check, eval_u16_range_check_circuit, generate_u16_range_check,
@@ -60,6 +62,93 @@ use crate::{
     },
     utils::{columns_to_fq, fq_to_columns, u32_digits_to_biguint},
 };
+
+pub struct G1ExpIONative {
+    pub x: G1Affine,
+    pub offset: G1Affine,
+    pub exp_val: [u32; NUM_INPUT_LIMBS],
+    pub output: G1Affine,
+}
+
+pub struct G1ExpIO<F> {
+    pub x: [[F; NUM_INPUT_LIMBS]; 2],
+    pub offset: [[F; NUM_INPUT_LIMBS]; 2],
+    pub exp_val: [F; NUM_INPUT_LIMBS],
+    pub output: [[F; NUM_INPUT_LIMBS]; 2],
+}
+
+pub fn fq_to_u32_columns<F: RichField>(x: Fq) -> [F; NUM_INPUT_LIMBS] {
+    let x_biguint: BigUint = x.into();
+    let mut x_u32_limbs = x_biguint.to_u32_digits();
+    let to_pad = NUM_INPUT_LIMBS - x_u32_limbs.len();
+    x_u32_limbs.extend(vec![0; to_pad]);
+    let x_u32_limbs = x_u32_limbs
+        .into_iter()
+        .map(|x| F::from_canonical_u32(x))
+        .collect_vec();
+    x_u32_limbs.try_into().unwrap()
+}
+
+pub fn read_u32_fq<F: Clone + core::fmt::Debug>(
+    lv: &[F],
+    cur_col: &mut usize,
+) -> [F; NUM_INPUT_LIMBS] {
+    let output = lv[*cur_col..*cur_col + NUM_INPUT_LIMBS].to_vec();
+    *cur_col += NUM_INPUT_LIMBS;
+    output.try_into().unwrap()
+}
+
+pub fn g1_exp_io_to_columns<F: RichField>(input: &G1ExpIONative) -> [F; 7 * NUM_INPUT_LIMBS] {
+    let exp_val = input.exp_val.map(F::from_canonical_u32);
+    let mut columns = vec![];
+    columns.extend(fq_to_u32_columns::<F>(input.x.x));
+    columns.extend(fq_to_u32_columns::<F>(input.x.y));
+    columns.extend(fq_to_u32_columns::<F>(input.offset.x));
+    columns.extend(fq_to_u32_columns::<F>(input.offset.y));
+    columns.extend(exp_val);
+    columns.extend(fq_to_u32_columns::<F>(input.output.x));
+    columns.extend(fq_to_u32_columns::<F>(input.output.y));
+    columns.try_into().unwrap()
+}
+
+pub fn read_g1_exp_io<F: Clone + core::fmt::Debug>(lv: &[F], cur_col: &mut usize) -> G1ExpIO<F> {
+    let x_x = read_u32_fq(lv, cur_col);
+    let x_y = read_u32_fq(lv, cur_col);
+    let offset_x = read_u32_fq(lv, cur_col);
+    let offset_y = read_u32_fq(lv, cur_col);
+    let exp_val = read_u32_fq(lv, cur_col);
+    let output_x = read_u32_fq(lv, cur_col);
+    let output_y = read_u32_fq(lv, cur_col);
+    G1ExpIO {
+        x: [x_x, x_y],
+        offset: [offset_x, offset_y],
+        exp_val,
+        output: [output_x, output_y],
+    }
+}
+
+pub fn u16_columns_to_u32_columns<P: PackedField>(x: [P; N_LIMBS]) -> [P; NUM_INPUT_LIMBS] {
+    use plonky2::field::types::Field;
+    let base = P::Scalar::from_canonical_u32(1 << LIMB_BITS);
+    x.chunks(2)
+        .map(|chunk| chunk[0] + base * chunk[1])
+        .collect_vec()
+        .try_into()
+        .unwrap()
+}
+
+pub fn u16_columns_to_u32_columns_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    x: [ExtensionTarget<D>; N_LIMBS],
+) -> [ExtensionTarget<D>; NUM_INPUT_LIMBS] {
+    use plonky2::field::types::Field;
+    let base = builder.constant_extension(F::Extension::from_canonical_u32(1 << LIMB_BITS));
+    x.chunks(2)
+        .map(|chunk| builder.mul_add_extension(chunk[1], base, chunk[0]))
+        .collect_vec()
+        .try_into()
+        .unwrap()
+}
 
 pub fn get_pulse_positions() -> Vec<usize> {
     let num_rows_per_block = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
@@ -157,7 +246,7 @@ impl<F: RichField + Extendable<D>, const D: usize> G1ExpStark<F, D> {
         x: G1Affine,
         offset: G1Affine,
         exp_val: [u32; NUM_INPUT_LIMBS],
-    ) -> (G1Affine, Vec<Vec<F>>) {
+    ) -> Vec<Vec<F>> {
         let num_rows = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
         let mut lv = vec![F::ZERO; MAIN_COLS];
         generate_flags_first_row(&mut lv, START_FLAGS, exp_val);
@@ -184,21 +273,15 @@ impl<F: RichField + Extendable<D>, const D: usize> G1ExpStark<F, D> {
         let expected: G1Affine = (x * exp_val_fr + offset).into();
         assert!(output == expected);
 
-        (output, rows)
+        rows
     }
 
-    pub fn generate_trace(
-        &self,
-        offset: G1Affine,
-        inputs: Vec<(G1Affine, [u32; NUM_INPUT_LIMBS])>,
-    ) -> Vec<PolynomialValues<F>> {
+    pub fn generate_trace(&self, inputs: &[G1ExpIONative]) -> Vec<PolynomialValues<F>> {
         assert!(inputs.len() == NUM_IO);
 
         let mut rows = vec![];
-        let mut offset = offset;
         for input in inputs.clone() {
-            let (output, row) = self.generate_trace_for_one_block(input.0, offset, input.1);
-            offset = output;
+            let row = self.generate_trace_for_one_block(input.x, input.offset, input.exp_val);
             rows.extend(row);
         }
         let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
@@ -236,6 +319,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F,
         let is_final_col = IS_FINAL_COL;
         let is_double_col = START_FLAGS + 2;
         let is_add_col = START_FLAGS + 4;
+        let start_limbs_col = START_FLAGS + 6;
 
         let lv = vars.local_values;
         let nv = vars.next_values;
@@ -250,6 +334,36 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F,
         let is_double = lv[is_double_col];
         let is_final = lv[is_final_col];
         let is_not_final = P::ONES - is_final;
+
+        // constraints for is_final
+        let mut sum_is_output = P::ZEROS;
+        for i in (0..2 * NUM_IO).skip(1).step_by(2) {
+            sum_is_output = sum_is_output + lv[get_pulse_col(START_IO_PULSES, i)];
+        }
+        yield_constr.constraint(is_final - sum_is_output);
+
+        // public inputs
+        let pi: &[P] = &vars.public_inputs.map(|x| x.into());
+        cur_col = 0;
+        for i in (0..2 * NUM_IO).step_by(2) {
+            let g1_exp_io = read_g1_exp_io(pi, &mut cur_col);
+            let is_ith_input = lv[get_pulse_col(START_IO_PULSES, i)];
+            let is_ith_output = lv[get_pulse_col(START_IO_PULSES, i + 1)];
+            let x_x = u16_columns_to_u32_columns(a_x);
+            let x_y = u16_columns_to_u32_columns(a_y);
+            let b_x = u16_columns_to_u32_columns(b_x);
+            let b_y = u16_columns_to_u32_columns(b_y);
+            vec_equal(yield_constr, is_ith_input, &g1_exp_io.x[0], &x_x);
+            vec_equal(yield_constr, is_ith_input, &g1_exp_io.x[1], &x_y);
+            vec_equal(yield_constr, is_ith_input, &g1_exp_io.offset[0], &b_x);
+            vec_equal(yield_constr, is_ith_input, &g1_exp_io.offset[1], &b_y);
+            vec_equal(yield_constr, is_ith_output, &g1_exp_io.output[0], &b_x);
+            vec_equal(yield_constr, is_ith_output, &g1_exp_io.output[1], &b_y);
+            let bit = is_add;
+            let mut limbs = lv[start_limbs_col..start_limbs_col + NUM_INPUT_LIMBS].to_vec();
+            limbs[0] = limbs[0] * P::Scalar::TWO + bit;
+            vec_equal(yield_constr, is_ith_input, &g1_exp_io.exp_val, &limbs);
+        }
 
         // transition
         cur_col = 0;
@@ -364,6 +478,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F,
         let is_final_col = IS_FINAL_COL;
         let is_double_col = START_FLAGS + 2;
         let is_add_col = START_FLAGS + 4;
+        let start_limbs_col = START_FLAGS + 6;
 
         let lv = vars.local_values;
         let nv = vars.next_values;
@@ -378,6 +493,68 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F,
         let is_double = lv[is_double_col];
         let is_final = lv[is_final_col];
         let is_not_final = builder.sub_extension(one, is_final);
+
+        // constraints for is_final
+        let mut sum_is_output = builder.zero_extension();
+        for i in (0..2 * NUM_IO).skip(1).step_by(2) {
+            sum_is_output =
+                builder.add_extension(sum_is_output, lv[get_pulse_col(START_IO_PULSES, i)]);
+        }
+        let diff = builder.sub_extension(is_final, sum_is_output);
+        yield_constr.constraint(builder, diff);
+
+        // public inputs
+        cur_col = 0;
+        for i in (0..2 * NUM_IO).step_by(2) {
+            let g1_exp_io = read_g1_exp_io(vars.public_inputs, &mut cur_col);
+            let is_ith_input = lv[get_pulse_col(START_IO_PULSES, i)];
+            let is_ith_output = lv[get_pulse_col(START_IO_PULSES, i + 1)];
+            let x_x = u16_columns_to_u32_columns_circuit(builder, a_x);
+            let x_y = u16_columns_to_u32_columns_circuit(builder, a_y);
+            let b_x = u16_columns_to_u32_columns_circuit(builder, b_x);
+            let b_y = u16_columns_to_u32_columns_circuit(builder, b_y);
+            vec_equal_circuit(builder, yield_constr, is_ith_input, &g1_exp_io.x[0], &x_x);
+            vec_equal_circuit(builder, yield_constr, is_ith_input, &g1_exp_io.x[1], &x_y);
+            vec_equal_circuit(
+                builder,
+                yield_constr,
+                is_ith_input,
+                &g1_exp_io.offset[0],
+                &b_x,
+            );
+            vec_equal_circuit(
+                builder,
+                yield_constr,
+                is_ith_input,
+                &g1_exp_io.offset[1],
+                &b_y,
+            );
+            vec_equal_circuit(
+                builder,
+                yield_constr,
+                is_ith_output,
+                &g1_exp_io.output[0],
+                &b_x,
+            );
+            vec_equal_circuit(
+                builder,
+                yield_constr,
+                is_ith_output,
+                &g1_exp_io.output[1],
+                &b_y,
+            );
+            let bit = is_add;
+            let mut limbs = lv[start_limbs_col..start_limbs_col + NUM_INPUT_LIMBS].to_vec();
+            let two = builder.two_extension();
+            limbs[0] = builder.mul_add_extension(limbs[0], two, bit);
+            vec_equal_circuit(
+                builder,
+                yield_constr,
+                is_ith_input,
+                &g1_exp_io.exp_val,
+                &limbs,
+            );
+        }
 
         // transition
         cur_col = 0;
@@ -538,11 +715,13 @@ mod tests {
 
     use crate::{
         constants::BITS_LEN,
-        g1_exp::{G1ExpStark, NUM_IO},
+        flags::NUM_INPUT_LIMBS,
+        g1_exp::{g1_exp_io_to_columns, G1ExpIONative, G1ExpStark, NUM_IO},
         utils::{biguint_to_bits, bits_to_biguint},
     };
     use ark_bn254::{Fr, G1Affine};
     use ark_std::UniformRand;
+    use itertools::Itertools;
     use num_bigint::BigUint;
     use plonky2::{
         iop::witness::PartialWitness,
@@ -574,30 +753,50 @@ mod tests {
     }
 
     #[test]
-    fn test_new_g1_exp() {
+    fn test_g1_exp() {
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
 
         let mut rng = rand::thread_rng();
-        let exp_val: Fr = Fr::rand(&mut rng);
-        let exp_val_biguint: BigUint = exp_val.into();
-        let x = G1Affine::rand(&mut rng);
-        let offset = G1Affine::rand(&mut rng);
+
+        let inputs = (0..NUM_IO)
+            .map(|_| {
+                let exp_val: Fr = Fr::rand(&mut rng);
+                let exp_val_biguint: BigUint = exp_val.into();
+                let x = G1Affine::rand(&mut rng);
+                let offset = G1Affine::rand(&mut rng);
+                let output: G1Affine = (x * exp_val + offset).into();
+                let exp_val: [u32; NUM_INPUT_LIMBS] =
+                    exp_val_biguint.to_u32_digits().try_into().unwrap();
+                G1ExpIONative {
+                    x,
+                    offset,
+                    exp_val,
+                    output,
+                }
+            })
+            .collect_vec();
+        let pi = inputs
+            .iter()
+            .flat_map(|input| g1_exp_io_to_columns::<F>(input))
+            .collect_vec();
 
         type S = G1ExpStark<F, D>;
         let inner_config = StarkConfig::standard_fast_config();
         let stark = S::new();
-        let trace = stark.generate_trace(
-            offset,
-            vec![(x, exp_val_biguint.to_u32_digits().try_into().unwrap()); NUM_IO],
-        );
 
         println!("start stark proof generation");
         let now = Instant::now();
-        let inner_proof =
-            prove::<F, C, S, D>(stark, &inner_config, trace, [], &mut TimingTree::default())
-                .unwrap();
+        let trace = stark.generate_trace(&inputs);
+        let inner_proof = prove::<F, C, S, D>(
+            stark,
+            &inner_config,
+            trace,
+            pi.try_into().unwrap(),
+            &mut TimingTree::default(),
+        )
+        .unwrap();
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
         println!("end stark proof generation: {:?}", now.elapsed());
 
@@ -614,7 +813,5 @@ mod tests {
         let now = Instant::now();
         let _proof = data.prove(pw).unwrap();
         println!("end plonky2 proof generation: {:?}", now.elapsed());
-
-        // dbg!(degree_bits);
     }
 }

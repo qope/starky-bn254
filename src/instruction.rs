@@ -173,6 +173,33 @@ pub fn eval_pow_instruction_cirucuit<
     }
 }
 
+pub fn vec_equal<P: PackedField>(
+    yield_constr: &mut ConstraintConsumer<P>,
+    filter: P,
+    x: &[P],
+    y: &[P],
+) {
+    assert!(x.len() == y.len());
+    x.iter()
+        .zip(y.iter())
+        .for_each(|(&x_i, &y_i)| yield_constr.constraint(filter * (x_i - y_i)));
+}
+
+pub fn vec_equal_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+    filter: ExtensionTarget<D>,
+    x: &[ExtensionTarget<D>],
+    y: &[ExtensionTarget<D>],
+) {
+    assert!(x.len() == y.len());
+    x.iter().zip(y.iter()).for_each(|(&x_i, &y_i)| {
+        let diff = builder.sub_extension(x_i, y_i);
+        let t = builder.mul_extension(filter, diff);
+        yield_constr.constraint(builder, t);
+    });
+}
+
 pub fn fq_equal_transition<P: PackedField>(
     yield_constr: &mut ConstraintConsumer<P>,
     filter: P,
