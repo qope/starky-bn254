@@ -5,6 +5,7 @@ use bitvec::prelude::*;
 use itertools::Itertools;
 use num_bigint::{BigInt, BigUint, Sign};
 use plonky2::field::extension::Extendable;
+use plonky2::field::packed::PackedField;
 use plonky2::field::polynomial::PolynomialValues;
 use plonky2::field::types::{Field, PrimeField64};
 use plonky2::hash::hash_types::RichField;
@@ -13,7 +14,50 @@ use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::util::transpose;
 
 use crate::constants::{LIMB_BITS, N_LIMBS};
+use crate::flags::NUM_INPUT_LIMBS;
 use crate::native::MyFq12;
+
+pub fn fq_to_u32_columns<F: RichField>(x: Fq) -> [F; NUM_INPUT_LIMBS] {
+    let x_biguint: BigUint = x.into();
+    let mut x_u32_limbs = x_biguint.to_u32_digits();
+    let to_pad = NUM_INPUT_LIMBS - x_u32_limbs.len();
+    x_u32_limbs.extend(vec![0; to_pad]);
+    let x_u32_limbs = x_u32_limbs
+        .into_iter()
+        .map(|x| F::from_canonical_u32(x))
+        .collect_vec();
+    x_u32_limbs.try_into().unwrap()
+}
+
+pub fn read_u32_fq<F: Clone + core::fmt::Debug>(
+    lv: &[F],
+    cur_col: &mut usize,
+) -> [F; NUM_INPUT_LIMBS] {
+    let output = lv[*cur_col..*cur_col + NUM_INPUT_LIMBS].to_vec();
+    *cur_col += NUM_INPUT_LIMBS;
+    output.try_into().unwrap()
+}
+
+pub fn u16_columns_to_u32_columns<P: PackedField>(x: [P; N_LIMBS]) -> [P; NUM_INPUT_LIMBS] {
+    let base = P::Scalar::from_canonical_u32(1 << LIMB_BITS);
+    x.chunks(2)
+        .map(|chunk| chunk[0] + base * chunk[1])
+        .collect_vec()
+        .try_into()
+        .unwrap()
+}
+
+pub fn u16_columns_to_u32_columns_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    x: [ExtensionTarget<D>; N_LIMBS],
+) -> [ExtensionTarget<D>; NUM_INPUT_LIMBS] {
+    let base = builder.constant_extension(F::Extension::from_canonical_u32(1 << LIMB_BITS));
+    x.chunks(2)
+        .map(|chunk| builder.mul_add_extension(chunk[1], base, chunk[0]))
+        .collect_vec()
+        .try_into()
+        .unwrap()
+}
 
 pub fn u32_digits_to_biguint(inputs: &[u32]) -> BigUint {
     let mut bits = vec![];

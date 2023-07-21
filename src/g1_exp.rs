@@ -19,9 +19,8 @@ const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECK;
 
 use core::marker::PhantomData;
 
-use ark_bn254::{Fq, Fr, G1Affine};
+use ark_bn254::{Fr, G1Affine};
 use itertools::Itertools;
-use num_bigint::BigUint;
 use plonky2::{
     field::{
         extension::{Extendable, FieldExtension},
@@ -29,7 +28,6 @@ use plonky2::{
         polynomial::PolynomialValues,
     },
     hash::hash_types::RichField,
-    iop::ext_target::ExtensionTarget,
     plonk::circuit_builder::CircuitBuilder,
     util::transpose,
 };
@@ -41,14 +39,14 @@ use starky::{
 };
 
 use crate::{
-    constants::{LIMB_BITS, N_LIMBS},
+    constants::N_LIMBS,
     flags::{
         eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
         INPUT_LIMB_BITS, NUM_INPUT_LIMBS,
     },
     g1::{
         eval_g1_add, eval_g1_add_circuit, eval_g1_double, eval_g1_double_circuit, generate_g1_add,
-        generate_g1_double, read_g1output, write_g1output, G1Output,
+        generate_g1_double, read_g1output, write_g1_output, G1Output,
     },
     instruction::{fq_equal_transition, fq_equal_transition_circuit, vec_equal, vec_equal_circuit},
     modular::{read_u256, write_u256},
@@ -60,7 +58,10 @@ use crate::{
         eval_u16_range_check, eval_u16_range_check_circuit, generate_u16_range_check,
         u16_range_check_pairs,
     },
-    utils::{columns_to_fq, fq_to_columns, u32_digits_to_biguint},
+    utils::{
+        columns_to_fq, fq_to_columns, fq_to_u32_columns, read_u32_fq, u16_columns_to_u32_columns,
+        u16_columns_to_u32_columns_circuit, u32_digits_to_biguint,
+    },
 };
 
 pub struct G1ExpIONative {
@@ -75,27 +76,6 @@ pub struct G1ExpIO<F> {
     pub offset: [[F; NUM_INPUT_LIMBS]; 2],
     pub exp_val: [F; NUM_INPUT_LIMBS],
     pub output: [[F; NUM_INPUT_LIMBS]; 2],
-}
-
-pub fn fq_to_u32_columns<F: RichField>(x: Fq) -> [F; NUM_INPUT_LIMBS] {
-    let x_biguint: BigUint = x.into();
-    let mut x_u32_limbs = x_biguint.to_u32_digits();
-    let to_pad = NUM_INPUT_LIMBS - x_u32_limbs.len();
-    x_u32_limbs.extend(vec![0; to_pad]);
-    let x_u32_limbs = x_u32_limbs
-        .into_iter()
-        .map(|x| F::from_canonical_u32(x))
-        .collect_vec();
-    x_u32_limbs.try_into().unwrap()
-}
-
-pub fn read_u32_fq<F: Clone + core::fmt::Debug>(
-    lv: &[F],
-    cur_col: &mut usize,
-) -> [F; NUM_INPUT_LIMBS] {
-    let output = lv[*cur_col..*cur_col + NUM_INPUT_LIMBS].to_vec();
-    *cur_col += NUM_INPUT_LIMBS;
-    output.try_into().unwrap()
 }
 
 pub fn g1_exp_io_to_columns<F: RichField>(input: &G1ExpIONative) -> [F; 7 * NUM_INPUT_LIMBS] {
@@ -125,29 +105,6 @@ pub fn read_g1_exp_io<F: Clone + core::fmt::Debug>(lv: &[F], cur_col: &mut usize
         exp_val,
         output: [output_x, output_y],
     }
-}
-
-pub fn u16_columns_to_u32_columns<P: PackedField>(x: [P; N_LIMBS]) -> [P; NUM_INPUT_LIMBS] {
-    use plonky2::field::types::Field;
-    let base = P::Scalar::from_canonical_u32(1 << LIMB_BITS);
-    x.chunks(2)
-        .map(|chunk| chunk[0] + base * chunk[1])
-        .collect_vec()
-        .try_into()
-        .unwrap()
-}
-
-pub fn u16_columns_to_u32_columns_circuit<F: RichField + Extendable<D>, const D: usize>(
-    builder: &mut CircuitBuilder<F, D>,
-    x: [ExtensionTarget<D>; N_LIMBS],
-) -> [ExtensionTarget<D>; NUM_INPUT_LIMBS] {
-    use plonky2::field::types::Field;
-    let base = builder.constant_extension(F::Extension::from_canonical_u32(1 << LIMB_BITS));
-    x.chunks(2)
-        .map(|chunk| builder.mul_add_extension(chunk[1], base, chunk[0]))
-        .collect_vec()
-        .try_into()
-        .unwrap()
 }
 
 pub fn get_pulse_positions() -> Vec<usize> {
@@ -186,7 +143,7 @@ pub fn generate_g1_exp_first_row<F: RichField>(
     write_u256(lv, &a_y, &mut cur_col);
     write_u256(lv, &b_x, &mut cur_col);
     write_u256(lv, &b_y, &mut cur_col);
-    write_g1output(lv, &output, &mut cur_col);
+    write_g1_output(lv, &output, &mut cur_col);
 }
 
 pub fn generate_g1_exp_next_row<F: RichField>(lv: &[F], nv: &mut [F], start_flag_col: usize) {
@@ -226,7 +183,7 @@ pub fn generate_g1_exp_next_row<F: RichField>(lv: &[F], nv: &mut [F], start_flag
     write_u256(nv, &next_a_y, &mut cur_col);
     write_u256(nv, &next_b_x, &mut cur_col);
     write_u256(nv, &next_b_y, &mut cur_col);
-    write_g1output(nv, &next_output, &mut cur_col);
+    write_g1_output(nv, &next_output, &mut cur_col);
 }
 
 #[derive(Clone, Copy)]
@@ -717,12 +674,11 @@ mod tests {
         constants::BITS_LEN,
         flags::NUM_INPUT_LIMBS,
         g1_exp::{g1_exp_io_to_columns, G1ExpIONative, G1ExpStark, NUM_IO},
-        utils::{biguint_to_bits, bits_to_biguint},
+        utils::{biguint_to_bits, bits_to_biguint, u32_digits_to_biguint},
     };
     use ark_bn254::{Fr, G1Affine};
     use ark_std::UniformRand;
     use itertools::Itertools;
-    use num_bigint::BigUint;
     use plonky2::{
         iop::witness::PartialWitness,
         plonk::{
@@ -762,13 +718,12 @@ mod tests {
 
         let inputs = (0..NUM_IO)
             .map(|_| {
-                let exp_val: Fr = Fr::rand(&mut rng);
-                let exp_val_biguint: BigUint = exp_val.into();
+                let exp_val: [u32; NUM_INPUT_LIMBS] = rand::random();
+                let exp_val_fr: Fr = u32_digits_to_biguint(&exp_val).into();
                 let x = G1Affine::rand(&mut rng);
                 let offset = G1Affine::rand(&mut rng);
-                let output: G1Affine = (x * exp_val + offset).into();
-                let exp_val: [u32; NUM_INPUT_LIMBS] =
-                    exp_val_biguint.to_u32_digits().try_into().unwrap();
+                let output: G1Affine = (x * exp_val_fr + offset).into();
+
                 G1ExpIONative {
                     x,
                     offset,

@@ -64,11 +64,7 @@ impl<F: RichField + Default> Default for G2Output<F> {
     }
 }
 
-pub fn write_g2_output<F: Copy, const NUM_COL: usize>(
-    lv: &mut [F; NUM_COL],
-    output: &G2Output<F>,
-    cur_col: &mut usize,
-) {
+pub fn write_g2_output<F: Copy>(lv: &mut [F], output: &G2Output<F>, cur_col: &mut usize) {
     let orinigal_col = *cur_col;
     write_fq2(lv, output.lambda, cur_col);
     write_fq2(lv, output.new_x, cur_col); // 2*N_LIMBS * 3
@@ -94,10 +90,7 @@ pub fn write_g2_output<F: Copy, const NUM_COL: usize>(
     assert!(*cur_col == orinigal_col + 40 * N_LIMBS);
 }
 
-pub fn read_g2_output<F: Copy + Debug, const NUM_COL: usize>(
-    lv: &[F; NUM_COL],
-    cur_col: &mut usize,
-) -> G2Output<F> {
+pub fn read_g2_output<F: Copy + Debug>(lv: &[F], cur_col: &mut usize) -> G2Output<F> {
     let orinigal_col = *cur_col;
     let lambda = read_fq2(lv, cur_col);
     let new_x = read_fq2(lv, cur_col);
@@ -658,11 +651,11 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2Stark<F, D>
         let lv = vars.local_values;
 
         let mut cur_col = 0;
-        let a_x = read_fq2(&lv, &mut cur_col);
-        let a_y = read_fq2(&lv, &mut cur_col);
-        let b_x = read_fq2(&lv, &mut cur_col);
-        let b_y = read_fq2(&lv, &mut cur_col);
-        let output = read_g2_output(&lv, &mut cur_col);
+        let a_x = read_fq2(lv, &mut cur_col);
+        let a_y = read_fq2(lv, &mut cur_col);
+        let b_x = read_fq2(lv, &mut cur_col);
+        let b_y = read_fq2(lv, &mut cur_col);
+        let output = read_g2_output(lv, &mut cur_col);
         let is_add = lv[IS_MUL_COL];
         let is_double = lv[IS_SQ_COL];
 
@@ -686,11 +679,11 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2Stark<F, D>
         let lv = vars.local_values;
 
         let mut cur_col = 0;
-        let a_x = read_fq2(&lv, &mut cur_col);
-        let a_y = read_fq2(&lv, &mut cur_col);
-        let b_x = read_fq2(&lv, &mut cur_col);
-        let b_y = read_fq2(&lv, &mut cur_col);
-        let output = read_g2_output(&lv, &mut cur_col);
+        let a_x = read_fq2(lv, &mut cur_col);
+        let a_y = read_fq2(lv, &mut cur_col);
+        let b_x = read_fq2(lv, &mut cur_col);
+        let b_y = read_fq2(lv, &mut cur_col);
+        let output = read_g2_output(lv, &mut cur_col);
         let is_add = lv[IS_MUL_COL];
         let is_double = lv[IS_SQ_COL];
 

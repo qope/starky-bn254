@@ -165,21 +165,14 @@ pub fn pol_mul_scalar_fq2_circuit<F: RichField + Extendable<D>, const D: usize, 
 }
 
 /// 2*N_LIMBS
-pub fn write_fq2<F: Copy, const NUM_COL: usize>(
-    lv: &mut [F; NUM_COL],
-    input: [[F; N_LIMBS]; 2],
-    cur_col: &mut usize,
-) {
+pub fn write_fq2<F: Copy>(lv: &mut [F], input: [[F; N_LIMBS]; 2], cur_col: &mut usize) {
     input
         .iter()
         .for_each(|coeff| write_u256(lv, coeff, cur_col));
 }
 
 /// 2*N_LIMBS
-pub fn read_fq2<F: Copy + Debug, const NUM_COL: usize>(
-    lv: &[F; NUM_COL],
-    cur_col: &mut usize,
-) -> [[F; N_LIMBS]; 2] {
+pub fn read_fq2<F: Copy + Debug>(lv: &[F], cur_col: &mut usize) -> [[F; N_LIMBS]; 2] {
     (0..2)
         .map(|_| read_u256(lv, cur_col))
         .collect_vec()

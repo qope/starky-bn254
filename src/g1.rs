@@ -76,7 +76,7 @@ impl<F: RichField + Default> Default for G1Output<F> {
 
 /// total: 20*N_LIMBS
 /// range_check: 20*N_LIMBS - 3
-pub fn write_g1output<F: Copy>(lv: &mut [F], output: &G1Output<F>, cur_col: &mut usize) {
+pub fn write_g1_output<F: Copy>(lv: &mut [F], output: &G1Output<F>, cur_col: &mut usize) {
     write_u256(lv, &output.lambda, cur_col); // N_LIMBS
     write_u256(lv, &output.new_x, cur_col); // N_LIMBS
     write_u256(lv, &output.new_y, cur_col); // N_LIMBS
@@ -522,8 +522,8 @@ impl<F: RichField + Extendable<D>, const D: usize> G1Stark<F, D> {
             write_u256(&mut lv, &a_y, &mut cur_col); // N_LIMBS
             write_u256(&mut lv, &b_x, &mut cur_col); // N_LIMBS
             write_u256(&mut lv, &b_y, &mut cur_col); // N_LIMBS
-            write_g1output(&mut lv, &output, &mut cur_col); // 20*N_LIMBS
-                                                            // filter, 1
+            write_g1_output(&mut lv, &output, &mut cur_col); // 20*N_LIMBS
+                                                             // filter, 1
             lv[cur_col] = is_add;
             cur_col += 1;
 
