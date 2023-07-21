@@ -42,10 +42,10 @@ pub fn generate_pulse<F: RichField>(trace_cols: &mut Vec<Vec<F>>, pulse_position
     }
 }
 
-pub fn eval_pulse<P: PackedField, const N: usize>(
+pub fn eval_pulse<P: PackedField>(
     yield_constr: &mut ConstraintConsumer<P>,
-    lv: &[P; N],
-    nv: &[P; N],
+    lv: &[P],
+    nv: &[P],
     start_pulse_col: usize,
     pulse_positions: Vec<usize>,
 ) {
@@ -62,11 +62,11 @@ pub fn eval_pulse<P: PackedField, const N: usize>(
     }
 }
 
-pub fn eval_pulse_circuit<F: RichField + Extendable<D>, const D: usize, const N: usize>(
+pub fn eval_pulse_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     yield_constr: &mut RecursiveConstraintConsumer<F, D>,
-    lv: &[ExtensionTarget<D>; N],
-    nv: &[ExtensionTarget<D>; N],
+    lv: &[ExtensionTarget<D>],
+    nv: &[ExtensionTarget<D>],
     start_pulse_col: usize,
     pulse_positions: Vec<usize>,
 ) {
@@ -143,10 +143,10 @@ pub fn generate_periodic_pulse_witness<F: RichField>(
     trace_cols.push(witness);
 }
 
-pub fn eval_periodic_pulse<P: PackedField, const N: usize>(
+pub fn eval_periodic_pulse<P: PackedField>(
     yield_constr: &mut ConstraintConsumer<P>,
-    lv: &[P; N],
-    nv: &[P; N],
+    lv: &[P],
+    nv: &[P],
     pulse_col: usize,
     start_pulse_col: usize,
     period: usize,
@@ -169,11 +169,11 @@ pub fn eval_periodic_pulse<P: PackedField, const N: usize>(
     yield_constr.constraint(delta * is_reset);
 }
 
-pub fn eval_periodic_pulse_circuit<F: RichField + Extendable<D>, const D: usize, const N: usize>(
+pub fn eval_periodic_pulse_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     yield_constr: &mut RecursiveConstraintConsumer<F, D>,
-    lv: &[ExtensionTarget<D>; N],
-    nv: &[ExtensionTarget<D>; N],
+    lv: &[ExtensionTarget<D>],
+    nv: &[ExtensionTarget<D>],
     pulse_col: usize,
     start_pulse_col: usize,
     period: usize,

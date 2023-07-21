@@ -131,10 +131,10 @@ pub fn generate_flags_next_row<F: RichField>(
     nv[filtered_bit_col] = nv[bit_col] * nv[b_col];
 }
 
-pub fn eval_flags<P: PackedField, const N: usize>(
+pub fn eval_flags<P: PackedField>(
     yield_constr: &mut ConstraintConsumer<P>,
-    lv: &[P; N],
-    nv: &[P; N],
+    lv: &[P],
+    nv: &[P],
     start_flag_col: usize,
 ) {
     let is_final_col = start_flag_col;
@@ -192,11 +192,11 @@ pub fn eval_flags<P: PackedField, const N: usize>(
     }
 }
 
-pub fn eval_flags_circuit<F: RichField + Extendable<D>, const D: usize, const N: usize>(
+pub fn eval_flags_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     yield_constr: &mut RecursiveConstraintConsumer<F, D>,
-    lv: &[ExtensionTarget<D>; N],
-    nv: &[ExtensionTarget<D>; N],
+    lv: &[ExtensionTarget<D>],
+    nv: &[ExtensionTarget<D>],
     start_flag_col: usize,
 ) {
     let one = builder.one_extension();
@@ -444,7 +444,7 @@ mod tests {
 
         fn eval_packed_generic<FE, P, const D2: usize>(
             &self,
-            vars: StarkEvaluationVars<FE, P, COLUMNS, PUBLIC_INPUTS>,
+            vars: StarkEvaluationVars<FE, P>,
             yield_constr: &mut ConstraintConsumer<P>,
         ) where
             FE: FieldExtension<D2, BaseField = F>,
@@ -493,7 +493,7 @@ mod tests {
         fn eval_ext_circuit(
             &self,
             builder: &mut CircuitBuilder<F, D>,
-            vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
+            vars: StarkEvaluationTargets<D>,
             yield_constr: &mut RecursiveConstraintConsumer<F, D>,
         ) {
             let num_rows_per_block = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;

@@ -13,8 +13,8 @@ const IS_FINAL_COL: usize = START_FLAGS;
 const START_IO_PULSES: usize = START_FLAGS + 16;
 const START_LOOKUPS: usize = START_IO_PULSES + 1 + 4 * NUM_IO;
 
-const START_RANGE_CHECK: usize = 0;
-const NUM_RANGE_CHECK: usize = 24 * N_LIMBS - 3;
+const START_RANGE_CHECK: usize = 24*N_LIMBS;
+const NUM_RANGE_CHECK: usize = 84 * N_LIMBS - 12;
 const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECK;
 
 use std::marker::PhantomData;
@@ -322,7 +322,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
 
     fn eval_packed_generic<FE, P, const D2: usize>(
         &self,
-        vars: StarkEvaluationVars<FE, P, COLUMNS, PUBLIC_INPUTS>,
+        vars: StarkEvaluationVars<FE, P>,
         yield_constr: &mut ConstraintConsumer<P>,
     ) where
         FE: FieldExtension<D2, BaseField = F>,
@@ -353,7 +353,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         yield_constr.constraint(is_final - sum_is_output);
 
         // public inputs
-        let pi: &[P] = &vars.public_inputs.map(|x| x.into());
+        let pi: &[P] = &vars.public_inputs.iter().map(|&x| x.into()).collect_vec();
         cur_col = 0;
         for i in (0..2 * NUM_IO).step_by(2) {
             let fq12_exp_io = read_fq12_exp_io(pi, &mut cur_col);
@@ -430,7 +430,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
     fn eval_ext_circuit(
         &self,
         builder: &mut CircuitBuilder<F, D>,
-        vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
+        vars: StarkEvaluationTargets<D>,
         yield_constr: &mut RecursiveConstraintConsumer<F, D>,
     ) {
         let one = builder.one_extension();

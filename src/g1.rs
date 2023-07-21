@@ -555,7 +555,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1Stark<F, D>
 
     fn eval_packed_generic<FE, P, const D2: usize>(
         &self,
-        vars: StarkEvaluationVars<FE, P, COLUMNS, PUBLIC_INPUTS>,
+        vars: StarkEvaluationVars<FE, P>,
         yield_constr: &mut ConstraintConsumer<P>,
     ) where
         FE: FieldExtension<D2, BaseField = F>,
@@ -590,7 +590,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1Stark<F, D>
     fn eval_ext_circuit(
         &self,
         builder: &mut CircuitBuilder<F, D>,
-        vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
+        vars: StarkEvaluationTargets<D>,
         yield_constr: &mut RecursiveConstraintConsumer<F, D>,
     ) {
         eval_split_u16_range_check_circuit(
