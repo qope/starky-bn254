@@ -168,9 +168,6 @@ mod tests {
     }
 
     impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for MyStark<F, D> {
-        const COLUMNS: usize = COLUMNS;
-        const PUBLIC_INPUTS: usize = PUBLIC_INPUTS;
-
         fn eval_packed_generic<FE, P, const D2: usize>(
             &self,
             vars: StarkEvaluationVars<FE, P>,
@@ -214,11 +211,11 @@ mod tests {
         type F = <C as GenericConfig<D>>::F;
         type S = MyStark<F, D>;
 
-        let config = StarkConfig::standard_fast_config();
+        let config = StarkConfig::standard_fast_config(COLUMNS, PUBLIC_INPUTS);
         let stark = S::new();
         let trace = stark.generate_trace();
         let proof =
-            prove::<F, C, S, D>(stark, &config, trace, [], &mut TimingTree::default()).unwrap();
+            prove::<F, C, S, D>(stark, &config, trace, vec![], &mut TimingTree::default()).unwrap();
 
         verify_stark_proof(stark, proof.clone(), &config).unwrap();
     }

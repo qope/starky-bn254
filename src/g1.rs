@@ -550,9 +550,6 @@ impl<F: RichField + Extendable<D>, const D: usize> G1Stark<F, D> {
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1Stark<F, D> {
-    const COLUMNS: usize = COLUMNS;
-    const PUBLIC_INPUTS: usize = PUBLIC_INPUTS;
-
     fn eval_packed_generic<FE, P, const D2: usize>(
         &self,
         vars: StarkEvaluationVars<FE, P>,
@@ -653,7 +650,7 @@ mod tests {
         verifier::verify_stark_proof,
     };
 
-    use crate::g1::G1Stark;
+    use crate::g1::{G1Stark, COLUMNS, PUBLIC_INPUTS};
 
     #[test]
     fn test_g1_mul() {
@@ -661,7 +658,7 @@ mod tests {
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
         type S = G1Stark<F, D>;
-        let inner_config = StarkConfig::standard_fast_config();
+        let inner_config = StarkConfig::standard_fast_config(COLUMNS, PUBLIC_INPUTS);
         let stark = S::new();
         let trace = stark.generate_trace();
 
