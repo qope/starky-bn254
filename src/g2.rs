@@ -1,28 +1,20 @@
 use core::fmt::Debug;
-use core::marker::PhantomData;
 
-use ark_bn254::{Fq2, G2Affine};
-use ark_std::UniformRand;
+use ark_bn254::Fq2;
 use itertools::Itertools;
-use plonky2::field::extension::{Extendable, FieldExtension};
+use plonky2::field::extension::Extendable;
 use plonky2::field::packed::PackedField;
-use plonky2::field::polynomial::PolynomialValues;
 use plonky2::field::types::Field;
 use plonky2::hash::hash_types::RichField;
 use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::util::transpose;
 
 use crate::constants::N_LIMBS;
 use crate::fq2::{read_fq2, write_fq2};
 use crate::modular::{read_modulus_aux, ModulusAux};
 use crate::modular_zero::{read_modulus_aux_zero, write_modulus_aux_zero, ModulusAuxZero};
 use starky::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
-use starky::permutation::PermutationPair;
-use starky::stark::Stark;
-use starky::vars::{StarkEvaluationTargets, StarkEvaluationVars};
 
-use super::constants::BITS_LEN;
 use super::fq2::{
     pol_add_fq2, pol_add_fq2_circuit, pol_mul_fq2, pol_mul_fq2_circuit, pol_mul_scalar_fq2,
     pol_mul_scalar_fq2_circuit, pol_sub_fq2, pol_sub_fq2_circuit, to_wide_fq2, to_wide_fq2_circuit,
@@ -32,10 +24,6 @@ use super::modular::{
     eval_modular_op_circuit, generate_modular_op, write_modulus_aux,
 };
 use super::modular_zero::{eval_modular_zero, eval_modular_zero_circuit, generate_modular_zero};
-use super::range_check::{
-    eval_split_u16_range_check, eval_split_u16_range_check_circuit, generate_split_u16_range_check,
-    split_u16_range_check_pairs,
-};
 use super::utils::{
     columns_to_fq2, fq2_to_columns, i64_to_column_positive, positive_column_to_i64,
 };
@@ -544,223 +532,4 @@ pub fn eval_g2_add_circuit<F: RichField + Extendable<D>, const D: usize>(
             &output.auxs[i + 2],
         )
     });
-}
-
-const ROWS: usize = 1 << 9;
-const MAIN_COLS: usize = 48 * N_LIMBS + 2 + BITS_LEN;
-const START_RANGE_CHECK: usize = 8 * N_LIMBS;
-const NUM_RANGE_CHECK: usize = 40 * N_LIMBS - 6;
-const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECK;
-const IS_SQ_COL: usize = 48 * N_LIMBS;
-// const IS_NOOP_COL: usize = 48 * N_LIMBS + 1;
-const IS_MUL_COL: usize = 48 * N_LIMBS + 2;
-
-const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECK;
-const PUBLIC_INPUTS: usize = 0;
-
-#[derive(Clone, Copy)]
-pub struct G2Stark<F: RichField + Extendable<D>, const D: usize> {
-    _phantom: PhantomData<F>,
-}
-
-impl<F: RichField + Extendable<D>, const D: usize> G2Stark<F, D> {
-    pub fn new() -> Self {
-        Self {
-            _phantom: PhantomData,
-        }
-    }
-
-    pub fn generate_trace(&self) -> Vec<PolynomialValues<F>> {
-        let mut rng = rand::thread_rng();
-
-        let mut rows = vec![];
-
-        for _ in 0..ROWS {
-            let is_add = F::ZERO;
-            let is_double = F::ONE;
-
-            let a_g2 = G2Affine::rand(&mut rng);
-            let b_g2 = G2Affine::rand(&mut rng);
-
-            let a_x = fq2_to_columns(a_g2.x).map(|x| x.map(F::from_canonical_i64));
-            let a_y = fq2_to_columns(a_g2.y).map(|x| x.map(F::from_canonical_i64));
-            let b_x = fq2_to_columns(b_g2.x).map(|x| x.map(F::from_canonical_i64));
-            let b_y = fq2_to_columns(b_g2.y).map(|x| x.map(F::from_canonical_i64));
-
-            let output = if is_add == F::ONE {
-                let output = generate_g2_add(a_x, a_y, b_x, b_y);
-                let expected: G2Affine = (a_g2 + b_g2).into();
-                let new_x = columns_to_fq2(output.new_x);
-                let new_y = columns_to_fq2(output.new_y);
-                let new_g2 = G2Affine::new(new_x, new_y);
-                assert!(new_g2 == expected);
-                output
-            } else {
-                let output = generate_g2_double(a_x, a_y);
-                let expected: G2Affine = (a_g2 + a_g2).into();
-                let new_x = columns_to_fq2(output.new_x);
-                let new_y = columns_to_fq2(output.new_y);
-                let new_g2 = G2Affine::new(new_x, new_y);
-                assert!(new_g2 == expected);
-                output
-            };
-
-            let mut lv = [F::ZERO; MAIN_COLS];
-            let mut cur_col = 0;
-            write_fq2(&mut lv, a_x, &mut cur_col); // N_LIMBS
-            write_fq2(&mut lv, a_y, &mut cur_col); // N_LIMBS
-            write_fq2(&mut lv, b_x, &mut cur_col); // N_LIMBS
-            write_fq2(&mut lv, b_y, &mut cur_col); // N_LIMBS
-            write_g2_output(&mut lv, &output, &mut cur_col); // 40*N_LIMBS
-            lv[IS_MUL_COL] = is_add;
-            lv[IS_SQ_COL] = is_double;
-
-            rows.push(lv);
-        }
-
-        let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
-
-        generate_split_u16_range_check(START_RANGE_CHECK..END_RANGE_CHECK, &mut trace_cols);
-
-        trace_cols
-            .into_iter()
-            .map(|column| PolynomialValues::new(column))
-            .collect()
-    }
-}
-
-impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2Stark<F, D> {
-    const COLUMNS: usize = COLUMNS;
-    const PUBLIC_INPUTS: usize = PUBLIC_INPUTS;
-
-    fn eval_packed_generic<FE, P, const D2: usize>(
-        &self,
-        vars: StarkEvaluationVars<FE, P, COLUMNS, PUBLIC_INPUTS>,
-        yield_constr: &mut ConstraintConsumer<P>,
-    ) where
-        FE: FieldExtension<D2, BaseField = F>,
-        P: PackedField<Scalar = FE>,
-    {
-        eval_split_u16_range_check(
-            vars,
-            yield_constr,
-            MAIN_COLS,
-            START_RANGE_CHECK..END_RANGE_CHECK,
-        );
-
-        let lv = vars.local_values;
-
-        let mut cur_col = 0;
-        let a_x = read_fq2(lv, &mut cur_col);
-        let a_y = read_fq2(lv, &mut cur_col);
-        let b_x = read_fq2(lv, &mut cur_col);
-        let b_y = read_fq2(lv, &mut cur_col);
-        let output = read_g2_output(lv, &mut cur_col);
-        let is_add = lv[IS_MUL_COL];
-        let is_double = lv[IS_SQ_COL];
-
-        eval_g2_add(yield_constr, is_add, a_x, a_y, b_x, b_y, &output);
-        eval_g2_double(yield_constr, is_double, a_x, a_y, &output);
-    }
-
-    fn eval_ext_circuit(
-        &self,
-        builder: &mut CircuitBuilder<F, D>,
-        vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
-        yield_constr: &mut RecursiveConstraintConsumer<F, D>,
-    ) {
-        eval_split_u16_range_check_circuit(
-            builder,
-            vars,
-            yield_constr,
-            MAIN_COLS,
-            START_RANGE_CHECK..END_RANGE_CHECK,
-        );
-        let lv = vars.local_values;
-
-        let mut cur_col = 0;
-        let a_x = read_fq2(lv, &mut cur_col);
-        let a_y = read_fq2(lv, &mut cur_col);
-        let b_x = read_fq2(lv, &mut cur_col);
-        let b_y = read_fq2(lv, &mut cur_col);
-        let output = read_g2_output(lv, &mut cur_col);
-        let is_add = lv[IS_MUL_COL];
-        let is_double = lv[IS_SQ_COL];
-
-        eval_g2_add_circuit(builder, yield_constr, is_add, a_x, a_y, b_x, b_y, &output);
-        eval_g2_double_circuit(builder, yield_constr, is_double, a_x, a_y, &output);
-    }
-
-    fn constraint_degree(&self) -> usize {
-        3
-    }
-
-    fn permutation_pairs(&self) -> Vec<PermutationPair> {
-        split_u16_range_check_pairs(MAIN_COLS, START_RANGE_CHECK..END_RANGE_CHECK)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Instant;
-
-    use plonky2::{
-        iop::witness::PartialWitness,
-        plonk::{
-            circuit_builder::CircuitBuilder,
-            circuit_data::CircuitConfig,
-            config::{GenericConfig, PoseidonGoldilocksConfig},
-        },
-        util::timing::TimingTree,
-    };
-
-    use crate::g2::G2Stark;
-    use starky::{
-        config::StarkConfig,
-        prover::prove,
-        recursive_verifier::{
-            add_virtual_stark_proof_with_pis, set_stark_proof_with_pis_target,
-            verify_stark_proof_circuit,
-        },
-        verifier::verify_stark_proof,
-    };
-
-    #[test]
-    fn test_g2_mul() {
-        const D: usize = 2;
-        type C = PoseidonGoldilocksConfig;
-        type F = <C as GenericConfig<D>>::F;
-        type S = G2Stark<F, D>;
-        let inner_config = StarkConfig::standard_fast_config();
-        let stark = S::new();
-        let trace = stark.generate_trace();
-
-        println!("start stark proof generation");
-        let now = Instant::now();
-        let pi = vec![];
-        let inner_proof = prove::<F, C, S, D>(
-            stark,
-            &inner_config,
-            trace,
-            pi.try_into().unwrap(),
-            &mut TimingTree::default(),
-        )
-        .unwrap();
-        verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
-        println!("end stark proof generation: {:?}", now.elapsed());
-
-        let circuit_config = CircuitConfig::standard_recursion_config();
-        let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
-        let mut pw = PartialWitness::new();
-        let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
-        let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
-        set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
-        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, &pt, &inner_config);
-        let data = builder.build::<C>();
-
-        println!("start plonky2 proof generation");
-        let now = Instant::now();
-        let _proof = data.prove(pw).unwrap();
-        println!("end plonky2 proof generation: {:?}", now.elapsed());
-    }
 }

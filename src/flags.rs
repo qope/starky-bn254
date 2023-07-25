@@ -27,6 +27,8 @@
 // split vals at r = 2*i + 1, and rotate at r = 2*limb_bits*(i+1) - 2
 // we need 8 limbs cols
 
+pub const NUM_FLAGS_COLS: usize = 6 + NUM_INPUT_LIMBS;
+
 use plonky2::{
     field::packed::PackedField,
     field::{extension::Extendable, types::Field},
@@ -131,10 +133,10 @@ pub fn generate_flags_next_row<F: RichField>(
     nv[filtered_bit_col] = nv[bit_col] * nv[b_col];
 }
 
-pub fn eval_flags<P: PackedField, const N: usize>(
+pub fn eval_flags<P: PackedField>(
     yield_constr: &mut ConstraintConsumer<P>,
-    lv: &[P; N],
-    nv: &[P; N],
+    lv: &[P],
+    nv: &[P],
     start_flag_col: usize,
 ) {
     let is_final_col = start_flag_col;
@@ -192,11 +194,11 @@ pub fn eval_flags<P: PackedField, const N: usize>(
     }
 }
 
-pub fn eval_flags_circuit<F: RichField + Extendable<D>, const D: usize, const N: usize>(
+pub fn eval_flags_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     yield_constr: &mut RecursiveConstraintConsumer<F, D>,
-    lv: &[ExtensionTarget<D>; N],
-    nv: &[ExtensionTarget<D>; N],
+    lv: &[ExtensionTarget<D>],
+    nv: &[ExtensionTarget<D>],
     start_flag_col: usize,
 ) {
     let one = builder.one_extension();
@@ -439,12 +441,9 @@ mod tests {
     }
 
     impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for FlagStark<F, D> {
-        const COLUMNS: usize = COLUMNS;
-        const PUBLIC_INPUTS: usize = PUBLIC_INPUTS;
-
         fn eval_packed_generic<FE, P, const D2: usize>(
             &self,
-            vars: StarkEvaluationVars<FE, P, COLUMNS, PUBLIC_INPUTS>,
+            vars: StarkEvaluationVars<FE, P>,
             yield_constr: &mut ConstraintConsumer<P>,
         ) where
             FE: FieldExtension<D2, BaseField = F>,
@@ -493,7 +492,7 @@ mod tests {
         fn eval_ext_circuit(
             &self,
             builder: &mut CircuitBuilder<F, D>,
-            vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
+            vars: StarkEvaluationTargets<D>,
             yield_constr: &mut RecursiveConstraintConsumer<F, D>,
         ) {
             let num_rows_per_block = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
@@ -555,12 +554,17 @@ mod tests {
             .collect_vec();
 
         type S = FlagStark<F, D>;
-        let inner_config = StarkConfig::standard_fast_config();
+        let inner_config = StarkConfig::standard_fast_config(COLUMNS, PUBLIC_INPUTS);
         let stark = S::new();
         let trace = stark.generate_trace(inputs);
-        let inner_proof =
-            prove::<F, C, S, D>(stark, &inner_config, trace, [], &mut TimingTree::default())
-                .unwrap();
+        let inner_proof = prove::<F, C, S, D>(
+            stark,
+            &inner_config,
+            trace,
+            vec![],
+            &mut TimingTree::default(),
+        )
+        .unwrap();
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
 
         let circuit_config = CircuitConfig::standard_recursion_config();

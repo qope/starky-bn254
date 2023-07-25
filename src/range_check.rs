@@ -46,13 +46,8 @@ pub fn generate_u16_range_check<F: RichField>(
     }
 }
 
-pub fn eval_u16_range_check<
-    F: Field,
-    P: PackedField<Scalar = F>,
-    const COLS: usize,
-    const PUBLIC_INPUTS: usize,
->(
-    vars: StarkEvaluationVars<F, P, COLS, PUBLIC_INPUTS>,
+pub fn eval_u16_range_check<F: Field, P: PackedField<Scalar = F>>(
+    vars: StarkEvaluationVars<F, P>,
     yield_constr: &mut ConstraintConsumer<P>,
     start_range_check: usize,
     target_cols: Range<usize>,
@@ -72,14 +67,9 @@ pub fn eval_u16_range_check<
     yield_constr.constraint_last_row(cur_table - range_max);
 }
 
-pub fn eval_u16_range_check_circuit<
-    F: RichField + Extendable<D>,
-    const D: usize,
-    const COLS: usize,
-    const PUBLIC_INPUTS: usize,
->(
+pub fn eval_u16_range_check_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
-    vars: StarkEvaluationTargets<D, COLS, PUBLIC_INPUTS>,
+    vars: StarkEvaluationTargets<D>,
     yield_constr: &mut RecursiveConstraintConsumer<F, D>,
     start_lookups: usize,
     target_cols: Range<usize>,
@@ -103,7 +93,10 @@ pub fn eval_u16_range_check_circuit<
     yield_constr.constraint_last_row(builder, t);
 }
 
-pub fn u16_range_check_pairs(start_lookups: usize, target_cols: Range<usize>) -> Vec<PermutationPair> {
+pub fn u16_range_check_pairs(
+    start_lookups: usize,
+    target_cols: Range<usize>,
+) -> Vec<PermutationPair> {
     let mut pairs = vec![];
 
     for (i, pos) in target_cols.enumerate() {
@@ -166,13 +159,8 @@ pub fn generate_split_u16_range_check<F: RichField>(
     }
 }
 
-pub fn eval_split_u16_range_check<
-    F: Field,
-    P: PackedField<Scalar = F>,
-    const COLS: usize,
-    const PUBLIC_INPUTS: usize,
->(
-    vars: StarkEvaluationVars<F, P, COLS, PUBLIC_INPUTS>,
+pub fn eval_split_u16_range_check<F: Field, P: PackedField<Scalar = F>>(
+    vars: StarkEvaluationVars<F, P>,
     yield_constr: &mut ConstraintConsumer<P>,
     main_col: usize,
     target_cols: Range<usize>,
@@ -203,14 +191,9 @@ pub fn eval_split_u16_range_check<
     yield_constr.constraint_last_row(cur_table - range_max);
 }
 
-pub fn eval_split_u16_range_check_circuit<
-    F: RichField + Extendable<D>,
-    const D: usize,
-    const COLS: usize,
-    const PUBLIC_INPUTS: usize,
->(
+pub fn eval_split_u16_range_check_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
-    vars: StarkEvaluationTargets<D, COLS, PUBLIC_INPUTS>,
+    vars: StarkEvaluationTargets<D>,
     yield_constr: &mut RecursiveConstraintConsumer<F, D>,
     main_col: usize,
     target_cols: Range<usize>,

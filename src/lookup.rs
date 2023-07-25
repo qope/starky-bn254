@@ -10,13 +10,8 @@ use plonky2::plonk::circuit_builder::CircuitBuilder;
 use starky::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
 use starky::vars::{StarkEvaluationTargets, StarkEvaluationVars};
 
-pub fn eval_lookups<
-    F: Field,
-    P: PackedField<Scalar = F>,
-    const COLS: usize,
-    const PUBLIC_INPUTS: usize,
->(
-    vars: StarkEvaluationVars<F, P, COLS, PUBLIC_INPUTS>,
+pub fn eval_lookups<F: Field, P: PackedField<Scalar = F>>(
+    vars: StarkEvaluationVars<F, P>,
     yield_constr: &mut ConstraintConsumer<P>,
     col_permuted_input: usize,
     col_permuted_table: usize,
@@ -38,14 +33,9 @@ pub fn eval_lookups<
     yield_constr.constraint_last_row(diff_input_table);
 }
 
-pub fn eval_lookups_circuit<
-    F: RichField + Extendable<D>,
-    const D: usize,
-    const COLS: usize,
-    const PUBLIC_INPUTS: usize,
->(
+pub fn eval_lookups_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
-    vars: StarkEvaluationTargets<D, COLS, PUBLIC_INPUTS>,
+    vars: StarkEvaluationTargets<D>,
     yield_constr: &mut RecursiveConstraintConsumer<F, D>,
     col_permuted_input: usize,
     col_permuted_table: usize,
@@ -178,12 +168,9 @@ mod tests {
     }
 
     impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for MyStark<F, D> {
-        const COLUMNS: usize = COLUMNS;
-        const PUBLIC_INPUTS: usize = PUBLIC_INPUTS;
-
         fn eval_packed_generic<FE, P, const D2: usize>(
             &self,
-            vars: StarkEvaluationVars<FE, P, COLUMNS, PUBLIC_INPUTS>,
+            vars: StarkEvaluationVars<FE, P>,
             yield_constr: &mut ConstraintConsumer<P>,
         ) where
             FE: FieldExtension<D2, BaseField = F>,
@@ -200,7 +187,7 @@ mod tests {
         fn eval_ext_circuit(
             &self,
             builder: &mut CircuitBuilder<F, D>,
-            vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
+            vars: StarkEvaluationTargets<D>,
             yield_constr: &mut RecursiveConstraintConsumer<F, D>,
         ) {
             eval_lookups_circuit(
@@ -224,11 +211,11 @@ mod tests {
         type F = <C as GenericConfig<D>>::F;
         type S = MyStark<F, D>;
 
-        let config = StarkConfig::standard_fast_config();
+        let config = StarkConfig::standard_fast_config(COLUMNS, PUBLIC_INPUTS);
         let stark = S::new();
         let trace = stark.generate_trace();
         let proof =
-            prove::<F, C, S, D>(stark, &config, trace, [], &mut TimingTree::default()).unwrap();
+            prove::<F, C, S, D>(stark, &config, trace, vec![], &mut TimingTree::default()).unwrap();
 
         verify_stark_proof(stark, proof.clone(), &config).unwrap();
     }

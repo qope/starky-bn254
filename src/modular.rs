@@ -444,12 +444,9 @@ mod tests {
     }
 
     impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for ModularStark<F, D> {
-        const COLUMNS: usize = COLUMNS;
-        const PUBLIC_INPUTS: usize = PUBLIC_INPUTS;
-
         fn eval_packed_generic<FE, P, const D2: usize>(
             &self,
-            vars: StarkEvaluationVars<FE, P, COLUMNS, PUBLIC_INPUTS>,
+            vars: StarkEvaluationVars<FE, P>,
             yield_constr: &mut ConstraintConsumer<P>,
         ) where
             FE: FieldExtension<D2, BaseField = F>,
@@ -494,7 +491,7 @@ mod tests {
         fn eval_ext_circuit(
             &self,
             builder: &mut CircuitBuilder<F, D>,
-            vars: StarkEvaluationTargets<D, COLUMNS, PUBLIC_INPUTS>,
+            vars: StarkEvaluationTargets<D>,
             yield_constr: &mut RecursiveConstraintConsumer<F, D>,
         ) {
             let lv = vars.local_values.clone();
@@ -552,7 +549,7 @@ mod tests {
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
         type S = ModularStark<F, D>;
-        let inner_config = StarkConfig::standard_fast_config();
+        let inner_config = StarkConfig::standard_fast_config(COLUMNS, PUBLIC_INPUTS);
         let stark = S::new();
         let trace = stark.generate_trace();
 
