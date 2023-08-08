@@ -44,13 +44,22 @@ use plonky2::{
         polynomial::PolynomialValues,
     },
     hash::hash_types::RichField,
-    plonk::circuit_builder::CircuitBuilder,
+    iop::{
+        target::Target,
+        witness::{PartialWitness, WitnessWrite},
+    },
+    plonk::{
+        circuit_builder::CircuitBuilder,
+        config::{AlgebraicHasher, GenericConfig},
+    },
     util::transpose,
 };
 use starky::{
     config::StarkConfig,
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
     permutation::PermutationPair,
+    proof::StarkProofWithPublicInputsTarget,
+    recursive_verifier::{add_virtual_stark_proof_with_pis, verify_stark_proof_circuit},
     stark::Stark,
     vars::{StarkEvaluationTargets, StarkEvaluationVars},
 };
@@ -88,11 +97,33 @@ pub struct G1ExpIONative {
     pub output: G1Affine,
 }
 
+pub const G1_EXP_IO_LEN: usize = 7 * NUM_INPUT_LIMBS;
+
+#[derive(Clone, Debug)]
 pub struct G1ExpIO<F> {
     pub x: [[F; NUM_INPUT_LIMBS]; 2],
     pub offset: [[F; NUM_INPUT_LIMBS]; 2],
     pub exp_val: [F; NUM_INPUT_LIMBS],
     pub output: [[F; NUM_INPUT_LIMBS]; 2],
+}
+
+impl G1ExpIO<Target> {
+    pub fn set_witness<F: RichField>(&self, pw: &mut PartialWitness<F>, value: &G1ExpIONative) {
+        let x_x = fq_to_u32_columns(value.x.x);
+        let x_y = fq_to_u32_columns(value.x.y);
+        let offset_x = fq_to_u32_columns(value.offset.x);
+        let offset_y = fq_to_u32_columns(value.offset.y);
+        let exp_val = value.exp_val.map(F::from_canonical_u32);
+        let output_x = fq_to_u32_columns(value.output.x);
+        let output_y = fq_to_u32_columns(value.output.y);
+        pw.set_target_arr(self.x[0], x_x);
+        pw.set_target_arr(self.x[1], x_y);
+        pw.set_target_arr(self.offset[0], offset_x);
+        pw.set_target_arr(self.offset[1], offset_y);
+        pw.set_target_arr(self.exp_val, exp_val);
+        pw.set_target_arr(self.output[0], output_x);
+        pw.set_target_arr(self.output[1], output_y);
+    }
 }
 
 pub fn g1_exp_io_to_columns<F: RichField>(input: &G1ExpIONative) -> [F; 7 * NUM_INPUT_LIMBS] {
@@ -715,13 +746,39 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F,
     }
 }
 
+pub fn g1_exp_circuit<F: RichField + Extendable<D>, C: GenericConfig<D, F = F>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    log_num_io: usize,
+) -> (Vec<G1ExpIO<Target>>, StarkProofWithPublicInputsTarget<D>)
+where
+    <C as GenericConfig<D>>::Hasher: AlgebraicHasher<F>,
+{
+    assert!(log_num_io >= 7);
+    let num_io = 1 << log_num_io;
+    let stark = G1ExpStark::<F, D>::new(num_io);
+    let inner_config = stark.config();
+    let degree_bits = 9 + log_num_io;
+    let starky_proof_t =
+        add_virtual_stark_proof_with_pis(builder, stark, &inner_config, degree_bits);
+    verify_stark_proof_circuit::<F, C, _, D>(builder, stark, &starky_proof_t, &inner_config);
+    assert!(starky_proof_t.public_inputs.len() == G1_EXP_IO_LEN * num_io);
+    let mut cur_col = 0;
+    let mut g1_exp_ios = vec![];
+    let pi = starky_proof_t.public_inputs.clone();
+    for _ in 0..num_io {
+        let g1_exp_io = read_g1_exp_io(&pi, &mut cur_col);
+        g1_exp_ios.push(g1_exp_io);
+    }
+    (g1_exp_ios, starky_proof_t)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
 
     use crate::{
         flags::NUM_INPUT_LIMBS,
-        g1_exp::{G1ExpIONative, G1ExpStark},
+        g1_exp::{g1_exp_circuit, G1ExpIONative, G1ExpStark},
         utils::{biguint_to_bits, bits_to_biguint, u32_digits_to_biguint},
     };
     use ark_bn254::{Fr, G1Affine};
@@ -757,7 +814,7 @@ mod tests {
 
     #[test]
     fn test_g1_exp() {
-        let num_io = 1 << 9;
+        let num_io = 1 << 7;
 
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
@@ -782,15 +839,14 @@ mod tests {
             })
             .collect_vec();
 
-        type S = G1ExpStark<F, D>;
-        let stark = S::new(num_io);
+        let stark = G1ExpStark::<F, D>::new(num_io);
         let inner_config = stark.config();
 
         println!("start stark proof generation");
         let now = Instant::now();
         let trace = stark.generate_trace(&inputs);
         let pi = stark.generate_public_inputs(&inputs);
-        let inner_proof = prove::<F, C, S, D>(
+        let inner_proof = prove::<F, C, _, D>(
             stark,
             &inner_config,
             trace,
@@ -810,12 +866,64 @@ mod tests {
 
         let pt = add_virtual_stark_proof_with_pis(&mut builder, stark, &inner_config, degree_bits);
         set_stark_proof_with_pis_target(&mut pw, &pt, &inner_proof);
-        verify_stark_proof_circuit::<F, C, S, D>(&mut builder, stark, &pt, &inner_config);
+        verify_stark_proof_circuit::<F, C, _, D>(&mut builder, stark, &pt, &inner_config);
         let data = builder.build::<C>();
 
         println!("start plonky2 proof generation");
         let now = Instant::now();
         let _proof = data.prove(pw).unwrap();
         println!("end plonky2 proof generation: {:?}", now.elapsed());
+    }
+
+    #[test]
+    fn test_g1_circuit() {
+        let log_num_io = 7;
+        let num_io = 1 << log_num_io;
+        let mut rng = rand::thread_rng();
+        const D: usize = 2;
+        type C = PoseidonGoldilocksConfig;
+        type F = <C as GenericConfig<D>>::F;
+
+        let circuit_config = CircuitConfig::standard_recursion_config();
+        let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
+        let (g1_exp_ios, starky_proof_t) = g1_exp_circuit::<F, C, D>(&mut builder, log_num_io);
+
+        let stark = G1ExpStark::<F, D>::new(num_io);
+        let inner_config = stark.config();
+        let inputs = (0..num_io)
+            .map(|_| {
+                let exp_val: [u32; NUM_INPUT_LIMBS] = rand::random();
+                let exp_val_fr: Fr = u32_digits_to_biguint(&exp_val).into();
+                let x = G1Affine::rand(&mut rng);
+                let offset = G1Affine::rand(&mut rng);
+                let output: G1Affine = (x * exp_val_fr + offset).into();
+                G1ExpIONative {
+                    x,
+                    offset,
+                    exp_val,
+                    output,
+                }
+            })
+            .collect_vec();
+        let trace = stark.generate_trace(&inputs);
+        let pi = stark.generate_public_inputs(&inputs);
+        let inner_proof = prove::<F, C, _, D>(
+            stark,
+            &inner_config,
+            trace,
+            pi.try_into().unwrap(),
+            &mut TimingTree::default(),
+        )
+        .unwrap();
+        verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
+
+        let mut pw = PartialWitness::<F>::new();
+        set_stark_proof_with_pis_target(&mut pw, &starky_proof_t, &inner_proof);
+        for i in 0..num_io {
+            g1_exp_ios[i].set_witness::<F>(&mut pw, &inputs[i]);
+        }
+
+        let data = builder.build::<C>();
+        let _proof = data.prove(pw).unwrap();
     }
 }

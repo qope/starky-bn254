@@ -1,4 +1,5 @@
 pub mod addcy;
+pub mod circuits;
 pub mod constants;
 pub mod flags;
 pub mod fq12;
