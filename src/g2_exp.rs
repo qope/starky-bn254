@@ -44,13 +44,19 @@ use plonky2::{
         polynomial::PolynomialValues,
     },
     hash::hash_types::RichField,
-    plonk::circuit_builder::CircuitBuilder,
+    iop::{target::Target, witness::{PartialWitness, WitnessWrite}},
+    plonk::{
+        circuit_builder::CircuitBuilder,
+        config::{AlgebraicHasher, GenericConfig},
+    },
     util::transpose,
 };
 use starky::{
     config::StarkConfig,
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
     permutation::PermutationPair,
+    proof::StarkProofWithPublicInputsTarget,
+    recursive_verifier::{add_virtual_stark_proof_with_pis, verify_stark_proof_circuit},
     stark::Stark,
     vars::{StarkEvaluationTargets, StarkEvaluationVars},
 };
@@ -91,11 +97,46 @@ pub struct G2ExpIONative {
     pub output: G2Affine,
 }
 
+pub const G2_EXP_IO_LEN: usize = 13 * NUM_INPUT_LIMBS;
+
+#[derive(Clone, Copy, Debug)]
 pub struct G2ExpIO<F> {
     pub x: [[F; NUM_INPUT_LIMBS]; 4],
     pub offset: [[F; NUM_INPUT_LIMBS]; 4],
     pub exp_val: [F; NUM_INPUT_LIMBS],
     pub output: [[F; NUM_INPUT_LIMBS]; 4],
+}
+
+impl G2ExpIO<Target> {
+    pub fn set_witness<F: RichField>(&self, pw: &mut PartialWitness<F>, value: &G2ExpIONative) {
+        let x_x_c0 = fq_to_u32_columns(value.x.x.c0);
+        let x_x_c1 = fq_to_u32_columns(value.x.x.c1);
+        let x_y_c0 = fq_to_u32_columns(value.x.y.c0);
+        let x_y_c1 = fq_to_u32_columns(value.x.y.c1);
+        let offset_x_c0 = fq_to_u32_columns(value.offset.x.c0);
+        let offset_x_c1 = fq_to_u32_columns(value.offset.x.c1);
+        let offset_y_c0 = fq_to_u32_columns(value.offset.y.c0);
+        let offset_y_c1 = fq_to_u32_columns(value.offset.y.c1);
+        let exp_val = value.exp_val.map(F::from_canonical_u32);
+        let output_x_c0 = fq_to_u32_columns(value.output.x.c0);
+        let output_x_c1 = fq_to_u32_columns(value.output.x.c1);
+        let output_y_c0 = fq_to_u32_columns(value.output.y.c0);
+        let output_y_c1 = fq_to_u32_columns(value.output.y.c1);
+
+        pw.set_target_arr(self.x[0], x_x_c0);
+        pw.set_target_arr(self.x[1], x_x_c1);
+        pw.set_target_arr(self.x[2], x_y_c0);
+        pw.set_target_arr(self.x[3], x_y_c1);
+        pw.set_target_arr(self.offset[0], offset_x_c0);
+        pw.set_target_arr(self.offset[1], offset_x_c1);
+        pw.set_target_arr(self.offset[2], offset_y_c0);
+        pw.set_target_arr(self.offset[3], offset_y_c1);
+        pw.set_target_arr(self.exp_val, exp_val);
+        pw.set_target_arr(self.output[0], output_x_c0);
+        pw.set_target_arr(self.output[1], output_x_c1);
+        pw.set_target_arr(self.output[2], output_y_c0);
+        pw.set_target_arr(self.output[3], output_y_c1);
+    }
 }
 
 pub fn g2_exp_io_to_columns<F: RichField>(input: &G2ExpIONative) -> [F; 13 * NUM_INPUT_LIMBS] {
@@ -766,6 +807,36 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2ExpStark<F,
             c.start_range_check_col..c.end_range_check_col,
         )
     }
+}
+
+pub(crate) fn g2_exp_circuit_with_proof_target<
+    F: RichField + Extendable<D>,
+    C: GenericConfig<D, F = F>,
+    const D: usize,
+>(
+    builder: &mut CircuitBuilder<F, D>,
+    log_num_io: usize,
+) -> (Vec<G2ExpIO<Target>>, StarkProofWithPublicInputsTarget<D>)
+where
+    <C as GenericConfig<D>>::Hasher: AlgebraicHasher<F>,
+{
+    assert!(log_num_io >= 7);
+    let num_io = 1 << log_num_io;
+    let stark = G2ExpStark::<F, D>::new(num_io);
+    let inner_config = stark.config();
+    let degree_bits = 9 + log_num_io;
+    let starky_proof_t =
+        add_virtual_stark_proof_with_pis(builder, stark, &inner_config, degree_bits);
+    verify_stark_proof_circuit::<F, C, _, D>(builder, stark, &starky_proof_t, &inner_config);
+    assert!(starky_proof_t.public_inputs.len() == G2_EXP_IO_LEN * num_io);
+    let mut cur_col = 0;
+    let mut g1_exp_ios = vec![];
+    let pi = starky_proof_t.public_inputs.clone();
+    for _ in 0..num_io {
+        let g1_exp_io = read_g2_exp_io(&pi, &mut cur_col);
+        g1_exp_ios.push(g1_exp_io);
+    }
+    (g1_exp_ios, starky_proof_t)
 }
 
 #[cfg(test)]

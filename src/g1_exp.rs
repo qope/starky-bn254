@@ -746,7 +746,11 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1ExpStark<F,
     }
 }
 
-pub fn g1_exp_circuit<F: RichField + Extendable<D>, C: GenericConfig<D, F = F>, const D: usize>(
+pub(crate) fn g1_exp_circuit_with_proof_target<
+    F: RichField + Extendable<D>,
+    C: GenericConfig<D, F = F>,
+    const D: usize,
+>(
     builder: &mut CircuitBuilder<F, D>,
     log_num_io: usize,
 ) -> (Vec<G1ExpIO<Target>>, StarkProofWithPublicInputsTarget<D>)
@@ -778,7 +782,7 @@ mod tests {
 
     use crate::{
         flags::NUM_INPUT_LIMBS,
-        g1_exp::{g1_exp_circuit, G1ExpIONative, G1ExpStark},
+        g1_exp::{g1_exp_circuit_with_proof_target, G1ExpIONative, G1ExpStark},
         utils::{biguint_to_bits, bits_to_biguint, u32_digits_to_biguint},
     };
     use ark_bn254::{Fr, G1Affine};
@@ -813,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn test_g1_exp() {
+    fn test_g1_exp_raw() {
         let num_io = 1 << 7;
 
         const D: usize = 2;
@@ -876,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn test_g1_circuit() {
+    fn test_g1_exp_wrapped_circuit() {
         let log_num_io = 7;
         let num_io = 1 << log_num_io;
         let mut rng = rand::thread_rng();
@@ -886,7 +890,8 @@ mod tests {
 
         let circuit_config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
-        let (g1_exp_ios, starky_proof_t) = g1_exp_circuit::<F, C, D>(&mut builder, log_num_io);
+        let (g1_exp_ios, starky_proof_t) =
+            g1_exp_circuit_with_proof_target::<F, C, D>(&mut builder, log_num_io);
 
         let stark = G1ExpStark::<F, D>::new(num_io);
         let inner_config = stark.config();
