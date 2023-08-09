@@ -44,10 +44,7 @@ use plonky2::{
         polynomial::PolynomialValues,
     },
     hash::hash_types::RichField,
-    iop::{
-        target::Target,
-        witness::{PartialWitness, WitnessWrite},
-    },
+    iop::{target::Target, witness::WitnessWrite},
     plonk::{
         circuit_builder::CircuitBuilder,
         config::{AlgebraicHasher, GenericConfig},
@@ -108,7 +105,7 @@ pub struct G1ExpIO<F> {
 }
 
 impl G1ExpIO<Target> {
-    pub fn set_witness<F: RichField>(&self, pw: &mut PartialWitness<F>, value: &G1ExpIONative) {
+    pub fn set_witness<F: RichField, W: WitnessWrite<F>>(&self, pw: &mut W, value: &G1ExpIONative) {
         let x_x = fq_to_u32_columns(value.x.x);
         let x_y = fq_to_u32_columns(value.x.y);
         let offset_x = fq_to_u32_columns(value.offset.x);
@@ -925,7 +922,7 @@ mod tests {
         let mut pw = PartialWitness::<F>::new();
         set_stark_proof_with_pis_target(&mut pw, &starky_proof_t, &inner_proof);
         for i in 0..num_io {
-            g1_exp_ios[i].set_witness::<F>(&mut pw, &inputs[i]);
+            g1_exp_ios[i].set_witness::<F, _>(&mut pw, &inputs[i]);
         }
 
         let data = builder.build::<C>();

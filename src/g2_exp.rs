@@ -44,7 +44,7 @@ use plonky2::{
         polynomial::PolynomialValues,
     },
     hash::hash_types::RichField,
-    iop::{target::Target, witness::{PartialWitness, WitnessWrite}},
+    iop::{target::Target, witness::WitnessWrite},
     plonk::{
         circuit_builder::CircuitBuilder,
         config::{AlgebraicHasher, GenericConfig},
@@ -108,7 +108,7 @@ pub struct G2ExpIO<F> {
 }
 
 impl G2ExpIO<Target> {
-    pub fn set_witness<F: RichField>(&self, pw: &mut PartialWitness<F>, value: &G2ExpIONative) {
+    pub fn set_witness<F: RichField, W: WitnessWrite<F>>(&self, pw: &mut W, value: &G2ExpIONative) {
         let x_x_c0 = fq_to_u32_columns(value.x.x.c0);
         let x_x_c1 = fq_to_u32_columns(value.x.x.c1);
         let x_y_c0 = fq_to_u32_columns(value.x.y.c0);

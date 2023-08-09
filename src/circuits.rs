@@ -127,6 +127,12 @@ where
         .unwrap();
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
         set_stark_proof_with_pis_target(out_buffer, &self.starky_proof, &inner_proof);
+        self.ios
+            .iter()
+            .zip(ios_native.iter())
+            .for_each(|(io, native)| {
+                io.set_witness(out_buffer, native);
+            });
     }
 }
 
@@ -260,10 +266,15 @@ where
         .unwrap();
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
         set_stark_proof_with_pis_target(out_buffer, &self.starky_proof, &inner_proof);
+
+        self.ios
+            .iter()
+            .zip(ios_native.iter())
+            .for_each(|(io, native)| {
+                io.set_witness(out_buffer, native);
+            });
     }
 }
-
-
 
 pub fn g2_exp_circuit<
     F: RichField + Extendable<D>,
@@ -296,8 +307,11 @@ mod tests {
     };
 
     use crate::{
-        circuits::{g1_exp_circuit, g2_exp_circuit}, flags::NUM_INPUT_LIMBS, g1_exp::G1ExpIONative,
-        utils::u32_digits_to_biguint, g2_exp::G2ExpIONative,
+        circuits::{g1_exp_circuit, g2_exp_circuit},
+        flags::NUM_INPUT_LIMBS,
+        g1_exp::G1ExpIONative,
+        g2_exp::G2ExpIONative,
+        utils::u32_digits_to_biguint,
     };
 
     #[test]
