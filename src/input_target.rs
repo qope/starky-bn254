@@ -13,12 +13,14 @@ pub const G1_EXP_INPUT_LEN: usize = 5 * 8;
 // pub const G2_EXP_STATEMENT_LEN: usize = 13 * 8;
 // pub const FQ12_EXP_STATEMENT_LEN: usize = 12 * 8 * 3 + 8;
 
+#[derive(Clone, Debug)]
 pub struct G1ExpInput {
     pub x: G1Affine,
     pub offset: G1Affine,
     pub exp_val: BigUint,
 }
 
+#[derive(Clone, Debug)]
 pub struct G1ExpInputTarget<F: RichField + Extendable<D>, const D: usize> {
     pub x: G1Target<F, D>,
     pub offset: G1Target<F, D>,

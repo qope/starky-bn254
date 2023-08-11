@@ -553,7 +553,7 @@ dependencies = [
 [[package]]
 name = "plonky2-bn254"
 version = "0.1.0"
-source = "git+https://github.com/qope/plonky2-bn254.git?rev=de7b1b4#de7b1b4c05350d25fe1c388099fea792b234c47c"
+source = "git+https://github.com/qope/plonky2-bn254.git?rev=46d94e8#46d94e8c8d74fc2c07d51d0a9d1619a2787ae1e7"
 dependencies = [
  "anyhow",
  "ark-bn254",

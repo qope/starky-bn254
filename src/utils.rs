@@ -21,6 +21,8 @@ pub fn is_power_of_two(num: usize) -> bool {
     num != 0 && num & (num - 1) == 0
 }
 
+
+
 pub fn fq_to_u32_columns<F: RichField>(x: Fq) -> [F; NUM_INPUT_LIMBS] {
     let x_biguint: BigUint = x.into();
     let mut x_u32_limbs = x_biguint.to_u32_digits();
