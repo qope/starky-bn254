@@ -113,13 +113,13 @@ impl G1ExpIO<Target> {
         let exp_val = value.exp_val.map(F::from_canonical_u32);
         let output_x = fq_to_u32_columns(value.output.x);
         let output_y = fq_to_u32_columns(value.output.y);
-        pw.set_target_arr(self.x[0], x_x);
-        pw.set_target_arr(self.x[1], x_y);
-        pw.set_target_arr(self.offset[0], offset_x);
-        pw.set_target_arr(self.offset[1], offset_y);
-        pw.set_target_arr(self.exp_val, exp_val);
-        pw.set_target_arr(self.output[0], output_x);
-        pw.set_target_arr(self.output[1], output_y);
+        pw.set_target_arr(&self.x[0], &x_x);
+        pw.set_target_arr(&self.x[1], &x_y);
+        pw.set_target_arr(&self.offset[0], &offset_x);
+        pw.set_target_arr(&self.offset[1], &offset_y);
+        pw.set_target_arr(&self.exp_val, &exp_val);
+        pw.set_target_arr(&self.output[0], &output_x);
+        pw.set_target_arr(&self.output[1], &output_y);
     }
 }
 

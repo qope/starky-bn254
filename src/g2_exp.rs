@@ -123,19 +123,19 @@ impl G2ExpIO<Target> {
         let output_y_c0 = fq_to_u32_columns(value.output.y.c0);
         let output_y_c1 = fq_to_u32_columns(value.output.y.c1);
 
-        pw.set_target_arr(self.x[0], x_x_c0);
-        pw.set_target_arr(self.x[1], x_x_c1);
-        pw.set_target_arr(self.x[2], x_y_c0);
-        pw.set_target_arr(self.x[3], x_y_c1);
-        pw.set_target_arr(self.offset[0], offset_x_c0);
-        pw.set_target_arr(self.offset[1], offset_x_c1);
-        pw.set_target_arr(self.offset[2], offset_y_c0);
-        pw.set_target_arr(self.offset[3], offset_y_c1);
-        pw.set_target_arr(self.exp_val, exp_val);
-        pw.set_target_arr(self.output[0], output_x_c0);
-        pw.set_target_arr(self.output[1], output_x_c1);
-        pw.set_target_arr(self.output[2], output_y_c0);
-        pw.set_target_arr(self.output[3], output_y_c1);
+        pw.set_target_arr(&self.x[0], &x_x_c0);
+        pw.set_target_arr(&self.x[1], &x_x_c1);
+        pw.set_target_arr(&self.x[2], &x_y_c0);
+        pw.set_target_arr(&self.x[3], &x_y_c1);
+        pw.set_target_arr(&self.offset[0], &offset_x_c0);
+        pw.set_target_arr(&self.offset[1], &offset_x_c1);
+        pw.set_target_arr(&self.offset[2], &offset_y_c0);
+        pw.set_target_arr(&self.offset[3], &offset_y_c1);
+        pw.set_target_arr(&self.exp_val, &exp_val);
+        pw.set_target_arr(&self.output[0], &output_x_c0);
+        pw.set_target_arr(&self.output[1], &output_x_c1);
+        pw.set_target_arr(&self.output[2], &output_y_c0);
+        pw.set_target_arr(&self.output[3], &output_y_c1);
     }
 }
 

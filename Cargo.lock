@@ -551,6 +551,68 @@ dependencies = [
 ]
 
 [[package]]
+name = "plonky2"
+version = "0.1.3"
+source = "git+https://github.com/InternetMaximalism/plonky2?rev=abee6e3#abee6e38fd43a403dd46ff692c968c0446769240"
+dependencies = [
+ "ahash 0.7.6",
+ "anyhow",
+ "getrandom",
+ "hashbrown 0.12.3",
+ "hex",
+ "itertools 0.10.5",
+ "keccak-hash",
+ "log",
+ "num",
+ "plonky2_field",
+ "plonky2_maybe_rayon 0.1.1",
+ "plonky2_util",
+ "rand",
+ "rand_chacha",
+ "serde",
+ "serde_json",
+ "static_assertions",
+ "unroll",
+]
+
+[[package]]
+name = "plonky2-bn254"
+version = "0.1.0"
+source = "git+https://github.com/qope/plonky2-bn254.git?rev=ef1e923#ef1e923919a186e85b6a006a3a258cddc0fd15e2"
+dependencies = [
+ "anyhow",
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "ark-std",
+ "bitvec",
+ "hex",
+ "itertools 0.10.5",
+ "num",
+ "num-bigint",
+ "num-traits",
+ "plonky2 0.1.3 (git+https://github.com/InternetMaximalism/plonky2?rev=abee6e3)",
+ "plonky2_ecdsa",
+ "plonky2_u32",
+ "rand",
+ "serde",
+]
+
+[[package]]
+name = "plonky2_ecdsa"
+version = "0.1.0"
+source = "git+https://github.com/InternetMaximalism/plonky2?rev=abee6e3#abee6e38fd43a403dd46ff692c968c0446769240"
+dependencies = [
+ "anyhow",
+ "itertools 0.10.5",
+ "num",
+ "plonky2 0.1.3 (git+https://github.com/InternetMaximalism/plonky2?rev=abee6e3)",
+ "plonky2_maybe_rayon 0.1.0 (git+https://github.com/InternetMaximalism/plonky2?rev=abee6e3)",
+ "plonky2_u32",
+ "serde",
+]
+
+[[package]]
 name = "plonky2_field"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -576,11 +638,27 @@ dependencies = [
 
 [[package]]
 name = "plonky2_maybe_rayon"
+version = "0.1.0"
+source = "git+https://github.com/InternetMaximalism/plonky2?rev=abee6e3#abee6e38fd43a403dd46ff692c968c0446769240"
+
+[[package]]
+name = "plonky2_maybe_rayon"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "194db0cbdd974e92d897cd92b74adb3968dc1b967315eb280357c49a7637994e"
 dependencies = [
  "rayon",
+]
+
+[[package]]
+name = "plonky2_u32"
+version = "0.1.0"
+source = "git+https://github.com/InternetMaximalism/plonky2?rev=abee6e3#abee6e38fd43a403dd46ff692c968c0446769240"
+dependencies = [
+ "anyhow",
+ "itertools 0.10.5",
+ "num",
+ "plonky2 0.1.3 (git+https://github.com/InternetMaximalism/plonky2?rev=abee6e3)",
 ]
 
 [[package]]
@@ -746,6 +824,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "starky"
+version = "0.1.1"
+source = "git+https://github.com/InternetMaximalism/plonky2?rev=541e127#541e127c3ffec4e0e61e302f0e39bea4f943e19c"
+dependencies = [
+ "anyhow",
+ "itertools 0.10.5",
+ "log",
+ "plonky2 0.1.3 (git+https://github.com/InternetMaximalism/plonky2?rev=541e127)",
+ "plonky2_maybe_rayon 0.1.1",
+]
+
+[[package]]
 name = "starky-bn254"
 version = "0.1.1"
 dependencies = [
@@ -761,10 +851,12 @@ dependencies = [
  "num",
  "num-bigint",
  "num-traits",
- "plonky2",
- "plonky2_maybe_rayon 0.1.0",
+ "plonky2 0.1.3 (git+https://github.com/InternetMaximalism/plonky2?rev=541e127)",
+ "plonky2-bn254",
+ "plonky2_maybe_rayon 0.1.0 (git+https://github.com/InternetMaximalism/plonky2?rev=541e127)",
  "rand",
  "rand_chacha",
+ "starky",
  "static_assertions",
 ]
 

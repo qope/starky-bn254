@@ -19,7 +19,7 @@ use plonky2::{
         circuit_builder::CircuitBuilder,
         config::{AlgebraicHasher, GenericConfig},
     },
-    util::timing::TimingTree,
+    util::{serialization::Buffer, timing::TimingTree},
 };
 use starky::{
     proof::StarkProofWithPublicInputsTarget, prover::prove,
@@ -133,6 +133,16 @@ where
             .for_each(|(io, native)| {
                 io.set_witness(out_buffer, native);
             });
+    }
+
+    fn id(&self) -> String {
+        "G1ExpStarkyProofGenerator".to_string()
+    }
+    fn serialize(&self, dst: &mut Vec<u8>) -> plonky2::util::serialization::IoResult<()> {
+        todo!()
+    }
+    fn deserialize(src: &mut Buffer) -> plonky2::util::serialization::IoResult<Self> {
+        todo!()
     }
 }
 
@@ -273,6 +283,16 @@ where
             .for_each(|(io, native)| {
                 io.set_witness(out_buffer, native);
             });
+    }
+
+    fn id(&self) -> String {
+        "G2ExpStarkyProofGenerator".to_string()
+    }
+    fn serialize(&self, dst: &mut Vec<u8>) -> plonky2::util::serialization::IoResult<()> {
+        todo!()
+    }
+    fn deserialize(src: &mut Buffer) -> plonky2::util::serialization::IoResult<Self> {
+        todo!()
     }
 }
 
