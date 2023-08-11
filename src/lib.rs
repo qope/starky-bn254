@@ -9,6 +9,7 @@ pub mod g1;
 pub mod g1_exp;
 pub mod g2;
 pub mod g2_exp;
+pub mod input_target;
 pub mod instruction;
 pub mod lookup;
 pub mod modular;

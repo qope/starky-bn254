@@ -51,6 +51,10 @@ use plonky2::{
     },
     util::transpose,
 };
+use plonky2_bn254::{
+    curves::g1curve_target::G1Target,
+    fields::{fq_target::FqTarget, u256_target::U256Target},
+};
 use starky::{
     config::StarkConfig,
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
@@ -71,6 +75,7 @@ use crate::{
         eval_g1_add, eval_g1_add_circuit, eval_g1_double, eval_g1_double_circuit, generate_g1_add,
         generate_g1_double, read_g1_output, write_g1_output, G1Output,
     },
+    input_target::G1ExpInputTarget,
     instruction::{fq_equal_transition, fq_equal_transition_circuit, vec_equal, vec_equal_circuit},
     modular::{read_u256, write_u256},
     pulse::{
@@ -750,7 +755,11 @@ pub(crate) fn g1_exp_circuit_with_proof_target<
 >(
     builder: &mut CircuitBuilder<F, D>,
     log_num_io: usize,
-) -> (Vec<G1ExpIO<Target>>, StarkProofWithPublicInputsTarget<D>)
+) -> (
+    Vec<G1ExpInputTarget<F, D>>,
+    Vec<G1Target<F, D>>,
+    StarkProofWithPublicInputsTarget<D>,
+)
 where
     <C as GenericConfig<D>>::Hasher: AlgebraicHasher<F>,
 {
@@ -764,13 +773,26 @@ where
     verify_stark_proof_circuit::<F, C, _, D>(builder, stark, &starky_proof_t, &inner_config);
     assert!(starky_proof_t.public_inputs.len() == G1_EXP_IO_LEN * num_io);
     let mut cur_col = 0;
-    let mut g1_exp_ios = vec![];
+    let mut inputs = vec![];
+    let mut outputs = vec![];
     let pi = starky_proof_t.public_inputs.clone();
     for _ in 0..num_io {
-        let g1_exp_io = read_g1_exp_io(&pi, &mut cur_col);
-        g1_exp_ios.push(g1_exp_io);
+        let io = read_g1_exp_io(&pi, &mut cur_col);
+        let x_x = FqTarget::from_limbs(builder, &io.x[0]);
+        let x_y = FqTarget::from_limbs(builder, &io.x[1]);
+        let x = G1Target::new(x_x, x_y);
+        let offset_x = FqTarget::from_limbs(builder, &io.offset[0]);
+        let offset_y = FqTarget::from_limbs(builder, &io.offset[1]);
+        let output_x = FqTarget::from_limbs(builder, &io.output[0]);
+        let output_y = FqTarget::from_limbs(builder, &io.output[1]);
+        let output = G1Target::new(output_x, output_y);
+        let offset = G1Target::new(offset_x, offset_y);
+        let exp_val = U256Target::<F, D>::from_vec(&io.exp_val);
+        let input = G1ExpInputTarget { x, offset, exp_val };
+        inputs.push(input);
+        outputs.push(output);
     }
-    (g1_exp_ios, starky_proof_t)
+    (inputs, outputs, starky_proof_t)
 }
 
 #[cfg(test)]
@@ -780,6 +802,7 @@ mod tests {
     use crate::{
         flags::NUM_INPUT_LIMBS,
         g1_exp::{g1_exp_circuit_with_proof_target, G1ExpIONative, G1ExpStark},
+        input_target::G1ExpInput,
         utils::{biguint_to_bits, bits_to_biguint, u32_digits_to_biguint},
     };
     use ark_bn254::{Fr, G1Affine};
@@ -877,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn test_g1_exp_wrapped_circuit() {
+    fn test_g1_exp_circuit() {
         let log_num_io = 7;
         let num_io = 1 << log_num_io;
         let mut rng = rand::thread_rng();
@@ -887,28 +910,39 @@ mod tests {
 
         let circuit_config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
-        let (g1_exp_ios, starky_proof_t) =
+        let (inputs_t, outputs_t, starky_proof_t) =
             g1_exp_circuit_with_proof_target::<F, C, D>(&mut builder, log_num_io);
 
         let stark = G1ExpStark::<F, D>::new(num_io);
         let inner_config = stark.config();
-        let inputs = (0..num_io)
-            .map(|_| {
-                let exp_val: [u32; NUM_INPUT_LIMBS] = rand::random();
-                let exp_val_fr: Fr = u32_digits_to_biguint(&exp_val).into();
-                let x = G1Affine::rand(&mut rng);
-                let offset = G1Affine::rand(&mut rng);
-                let output: G1Affine = (x * exp_val_fr + offset).into();
-                G1ExpIONative {
-                    x,
-                    offset,
-                    exp_val,
-                    output,
-                }
-            })
-            .collect_vec();
-        let trace = stark.generate_trace(&inputs);
-        let pi = stark.generate_public_inputs(&inputs);
+
+        let mut ios = vec![];
+        let mut inputs = vec![];
+        let mut outputs = vec![];
+        for _ in 0..num_io {
+            let exp_val: [u32; NUM_INPUT_LIMBS] = rand::random();
+            let exp_val_fr: Fr = u32_digits_to_biguint(&exp_val).into();
+            let x = G1Affine::rand(&mut rng);
+            let offset = G1Affine::rand(&mut rng);
+            let output: G1Affine = (x * exp_val_fr + offset).into();
+            let input = G1ExpInput {
+                x,
+                offset,
+                exp_val: u32_digits_to_biguint(&exp_val),
+            };
+            let io = G1ExpIONative {
+                x,
+                offset,
+                exp_val,
+                output,
+            };
+            inputs.push(input);
+            outputs.push(output);
+            ios.push(io);
+        }
+
+        let trace = stark.generate_trace(&ios);
+        let pi = stark.generate_public_inputs(&ios);
         let inner_proof = prove::<F, C, _, D>(
             stark,
             &inner_config,
@@ -921,9 +955,12 @@ mod tests {
 
         let mut pw = PartialWitness::<F>::new();
         set_stark_proof_with_pis_target(&mut pw, &starky_proof_t, &inner_proof);
-        for i in 0..num_io {
-            g1_exp_ios[i].set_witness::<F, _>(&mut pw, &inputs[i]);
-        }
+        inputs_t.iter().zip(inputs.iter()).for_each(|(t, w)| {
+            t.set_witness(&mut pw, w);
+        });
+        outputs_t.iter().zip(outputs.iter()).for_each(|(t, w)| {
+            t.set_witness(&mut pw, w);
+        });
 
         let data = builder.build::<C>();
         let _proof = data.prove(pw).unwrap();
