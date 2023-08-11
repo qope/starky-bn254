@@ -295,11 +295,12 @@ where
 #[cfg(test)]
 mod tests {
     use ark_bn254::{Fr, G1Affine, G2Affine};
+    use ark_ec::AffineRepr;
     use ark_std::UniformRand;
     use itertools::Itertools;
     use plonky2::{
-        field::goldilocks_field::GoldilocksField,
-        iop::witness::PartialWitness,
+        field::{goldilocks_field::GoldilocksField, types::Field},
+        iop::{generator, witness::PartialWitness},
         plonk::{
             circuit_builder::CircuitBuilder, circuit_data::CircuitConfig,
             config::PoseidonGoldilocksConfig,
@@ -311,7 +312,7 @@ mod tests {
         flags::NUM_INPUT_LIMBS,
         g1_exp::G1ExpIONative,
         g2_exp::G2ExpIONative,
-        utils::u32_digits_to_biguint,
+        utils::{fq_to_u32_columns, u32_digits_to_biguint},
     };
 
     #[test]
@@ -328,6 +329,68 @@ mod tests {
         let ios = g1_exp_circuit::<F, C, D>(&mut builder, log_num_io);
 
         let mut pw = PartialWitness::<F>::new();
+        let inputs = (0..num_io)
+            .map(|_| {
+                let exp_val: [u32; NUM_INPUT_LIMBS] = rand::random();
+                let exp_val_fr: Fr = u32_digits_to_biguint(&exp_val).into();
+                let x = G1Affine::rand(&mut rng);
+                let offset = G1Affine::rand(&mut rng);
+                let output: G1Affine = (x * exp_val_fr + offset).into();
+                G1ExpIONative {
+                    x,
+                    offset,
+                    exp_val,
+                    output,
+                }
+            })
+            .collect_vec();
+
+        ios.iter()
+            .zip(inputs.iter())
+            .for_each(|(io, input)| io.set_witness(&mut pw, input));
+        let data = builder.build::<C>();
+        let _proof = data.prove(pw).unwrap();
+    }
+
+    #[test]
+    fn test_g1_msm_circuit() {
+        let mut rng = rand::thread_rng();
+        type F = GoldilocksField;
+        type C = PoseidonGoldilocksConfig;
+        const D: usize = 2;
+        let log_num_io = 7;
+        let num_io = 1 << log_num_io;
+
+        let config = CircuitConfig::standard_recursion_config();
+        let mut builder = CircuitBuilder::<F, D>::new(config);
+        let ios = g1_exp_circuit::<F, C, D>(&mut builder, log_num_io);
+
+        let mut pw = PartialWitness::<F>::new();
+
+        let exp_vals: Vec<[u32; NUM_INPUT_LIMBS]> = (0..num_io).map(|_| rand::random()).collect();
+        let basis = (0..num_io).map(|_| G1Affine::rand(&mut rng)).collect_vec();
+        let expected = {
+            let mut expected = G1Affine::generator();
+            for (exp_val, &basis) in exp_vals.iter().zip(basis.iter()) {
+                let exp_val_fr: Fr = u32_digits_to_biguint(exp_val).into();
+                expected = (expected + basis * exp_val_fr).into();
+            }
+            expected
+        };
+        let generator = G1Affine::generator();
+        let generator_limbs_x: [F; 8] = fq_to_u32_columns(generator.x);
+        let generator_x_t = generator_limbs_x
+            .iter()
+            .map(|x| builder.constant(*x))
+            .collect_vec();
+        let generator_limbs_y: [F; 8] = fq_to_u32_columns(generator.y);
+        let generator_y_t = generator_limbs_y
+            .iter()
+            .map(|x| builder.constant(*x))
+            .collect_vec();
+        // let basis_limbs: Vec<_> = basis.iter().map(|x| fq_to_u32_columns(x.x)).collect();
+        // let mut offset =
+
         let inputs = (0..num_io)
             .map(|_| {
                 let exp_val: [u32; NUM_INPUT_LIMBS] = rand::random();
