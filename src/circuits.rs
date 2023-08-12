@@ -207,8 +207,10 @@ where
 #[cfg(test)]
 mod tests {
     use ark_bn254::{Fr, G1Affine};
+    use ark_ec::AffineRepr;
     use ark_std::UniformRand;
     use itertools::Itertools;
+    use num_bigint::BigUint;
     use plonky2::{
         field::goldilocks_field::GoldilocksField,
         iop::witness::PartialWitness,
@@ -275,6 +277,59 @@ mod tests {
             .zip(outputs.iter())
             .for_each(|(t, w)| t.set_witness(&mut pw, w));
 
+        let data = builder.build::<C>();
+        let _proof = data.prove(pw).unwrap();
+    }
+
+    #[test]
+    fn test_g1_msm() {
+        let mut rng = rand::thread_rng();
+        type F = GoldilocksField;
+        type C = PoseidonGoldilocksConfig;
+        const D: usize = 2;
+        let log_num_io = 7;
+        let num_io = 1 << log_num_io;
+
+        let config = CircuitConfig::standard_ecc_config();
+        let mut builder = CircuitBuilder::<F, D>::new(config);
+        let inputs_t = (0..num_io)
+            .map(|_| {
+                let x = G1Target::empty(&mut builder);
+                let offset = G1Target::empty(&mut builder);
+                let exp_val = U256Target::empty(&mut builder);
+                G1ExpInputTarget { x, offset, exp_val }
+            })
+            .collect_vec();
+        let outputs_t = g1_exp_circuit::<F, C, D>(&mut builder, &inputs_t);
+
+        let generator_t = G1Target::constant(&mut builder, G1Affine::generator());
+        G1Target::connect(&mut builder, &inputs_t[0].offset, &generator_t);
+        for i in 1..num_io {
+            G1Target::connect(&mut builder, &inputs_t[i].offset, &outputs_t[i - 1]);
+        }
+        let mut pw = PartialWitness::<F>::new();
+        let xs = (0..num_io).map(|_| G1Affine::rand(&mut rng)).collect_vec();
+        let exp_vals: Vec<BigUint> = (0..num_io)
+            .map(|_| {
+                let exp_val = Fr::rand(&mut rng);
+                exp_val.into()
+            })
+            .collect_vec();
+        let expected = {
+            let mut sum = G1Affine::zero();
+            for i in 0..num_io {
+                let exp_val_fr: Fr = exp_vals[i].clone().into();
+                sum = (sum + xs[i] * exp_val_fr).into();
+            }
+            sum
+        };
+        for i in 0..num_io {
+            inputs_t[i].x.set_witness(&mut pw, &xs[i]);
+            inputs_t[i].exp_val.set_witness(&mut pw, &exp_vals[i]);
+        }
+        let neg_generator = G1Target::constant(&mut builder, -G1Affine::generator());
+        let output = outputs_t.last().unwrap().add(&mut builder, &neg_generator);
+        output.set_witness(&mut pw, &expected);
         let data = builder.build::<C>();
         let _proof = data.prove(pw).unwrap();
     }

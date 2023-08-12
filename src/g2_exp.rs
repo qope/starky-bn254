@@ -809,7 +809,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2ExpStark<F,
     }
 }
 
-pub(crate) fn g2_exp_circuit_with_proof_target<
+pub fn g2_exp_circuit_with_proof_target<
     F: RichField + Extendable<D>,
     C: GenericConfig<D, F = F>,
     const D: usize,
