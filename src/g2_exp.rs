@@ -51,6 +51,10 @@ use plonky2::{
     },
     util::transpose,
 };
+use plonky2_bn254::{
+    curves::g2curve_target::G2Target,
+    fields::{fq2_target::Fq2Target, fq_target::FqTarget, u256_target::U256Target},
+};
 use starky::{
     config::StarkConfig,
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
@@ -73,6 +77,7 @@ use crate::{
         eval_g2_add, eval_g2_add_circuit, eval_g2_double, eval_g2_double_circuit, generate_g2_add,
         generate_g2_double, read_g2_output, write_g2_output, G2Output,
     },
+    input_target::G2ExpInputTarget,
     instruction::{
         fq2_equal_transition, fq2_equal_transition_circuit, vec_equal, vec_equal_circuit,
     },
@@ -809,14 +814,18 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2ExpStark<F,
     }
 }
 
-pub fn g2_exp_circuit_with_proof_target<
+pub(crate) fn g2_exp_circuit_with_proof_target<
     F: RichField + Extendable<D>,
     C: GenericConfig<D, F = F>,
     const D: usize,
 >(
     builder: &mut CircuitBuilder<F, D>,
     log_num_io: usize,
-) -> (Vec<G2ExpIO<Target>>, StarkProofWithPublicInputsTarget<D>)
+) -> (
+    Vec<G2ExpInputTarget<F, D>>,
+    Vec<G2Target<F, D>>,
+    StarkProofWithPublicInputsTarget<D>,
+)
 where
     <C as GenericConfig<D>>::Hasher: AlgebraicHasher<F>,
 {
@@ -830,13 +839,40 @@ where
     verify_stark_proof_circuit::<F, C, _, D>(builder, stark, &starky_proof_t, &inner_config);
     assert!(starky_proof_t.public_inputs.len() == G2_EXP_IO_LEN * num_io);
     let mut cur_col = 0;
-    let mut g1_exp_ios = vec![];
+    let mut inputs = vec![];
+    let mut outputs = vec![];
     let pi = starky_proof_t.public_inputs.clone();
     for _ in 0..num_io {
-        let g1_exp_io = read_g2_exp_io(&pi, &mut cur_col);
-        g1_exp_ios.push(g1_exp_io);
+        let io = read_g2_exp_io(&pi, &mut cur_col);
+        let x_x_c0 = FqTarget::from_limbs(builder, &io.x[0]);
+        let x_x_c1 = FqTarget::from_limbs(builder, &io.x[1]);
+        let x_y_c0 = FqTarget::from_limbs(builder, &io.x[2]);
+        let x_y_c1 = FqTarget::from_limbs(builder, &io.x[3]);
+        let x_x = Fq2Target::new(vec![x_x_c0, x_x_c1]);
+        let x_y = Fq2Target::new(vec![x_y_c0, x_y_c1]);
+        let x = G2Target::new(x_x, x_y);
+
+        let offset_x_c0 = FqTarget::from_limbs(builder, &io.offset[0]);
+        let offset_x_c1 = FqTarget::from_limbs(builder, &io.offset[1]);
+        let offset_y_c0 = FqTarget::from_limbs(builder, &io.offset[2]);
+        let offset_y_c1 = FqTarget::from_limbs(builder, &io.offset[3]);
+        let offset_x = Fq2Target::new(vec![offset_x_c0, offset_x_c1]);
+        let offset_y = Fq2Target::new(vec![offset_y_c0, offset_y_c1]);
+        let offset = G2Target::new(offset_x, offset_y);
+
+        let output_x_c0 = FqTarget::from_limbs(builder, &io.output[0]);
+        let output_x_c1 = FqTarget::from_limbs(builder, &io.output[1]);
+        let output_y_c0 = FqTarget::from_limbs(builder, &io.output[2]);
+        let output_y_c1 = FqTarget::from_limbs(builder, &io.output[3]);
+        let output_x = Fq2Target::new(vec![output_x_c0, output_x_c1]);
+        let output_y = Fq2Target::new(vec![output_y_c0, output_y_c1]);
+        let output = G2Target::new(output_x, output_y);
+        let exp_val = U256Target::<F, D>::from_vec(&io.exp_val);
+        let input = G2ExpInputTarget { x, offset, exp_val };
+        inputs.push(input);
+        outputs.push(output);
     }
-    (g1_exp_ios, starky_proof_t)
+    (inputs, outputs, starky_proof_t)
 }
 
 #[cfg(test)]
