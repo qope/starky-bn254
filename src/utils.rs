@@ -10,6 +10,7 @@ use plonky2::field::polynomial::PolynomialValues;
 use plonky2::field::types::{Field, PrimeField64};
 use plonky2::hash::hash_types::RichField;
 use plonky2::iop::ext_target::ExtensionTarget;
+use plonky2::iop::target::Target;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::util::transpose;
 
@@ -20,8 +21,6 @@ use crate::native::MyFq12;
 pub fn is_power_of_two(num: usize) -> bool {
     num != 0 && num & (num - 1) == 0
 }
-
-
 
 pub fn fq_to_u32_columns<F: RichField>(x: Fq) -> [F; NUM_INPUT_LIMBS] {
     let x_biguint: BigUint = x.into();
@@ -35,12 +34,23 @@ pub fn fq_to_u32_columns<F: RichField>(x: Fq) -> [F; NUM_INPUT_LIMBS] {
     x_u32_limbs.try_into().unwrap()
 }
 
+pub fn fq_to_u16_columns<F: RichField>(x: Fq) -> [F; N_LIMBS] {
+    let columns = fq_to_columns(x);
+    columns.map(|x| F::from_canonical_u16(x as u16))
+}
+
 pub fn read_u32_fq<F: Clone + core::fmt::Debug>(
     lv: &[F],
     cur_col: &mut usize,
 ) -> [F; NUM_INPUT_LIMBS] {
     let output = lv[*cur_col..*cur_col + NUM_INPUT_LIMBS].to_vec();
     *cur_col += NUM_INPUT_LIMBS;
+    output.try_into().unwrap()
+}
+
+pub fn read_u16_fq<F: Clone + core::fmt::Debug>(lv: &[F], cur_col: &mut usize) -> [F; N_LIMBS] {
+    let output = lv[*cur_col..*cur_col + N_LIMBS].to_vec();
+    *cur_col += N_LIMBS;
     output.try_into().unwrap()
 }
 
@@ -60,6 +70,17 @@ pub fn u16_columns_to_u32_columns_circuit<F: RichField + Extendable<D>, const D:
     let base = builder.constant_extension(F::Extension::from_canonical_u32(1 << LIMB_BITS));
     x.chunks(2)
         .map(|chunk| builder.mul_add_extension(chunk[1], base, chunk[0]))
+        .collect_vec()
+        .try_into()
+        .unwrap()
+}
+pub fn u16_columns_to_u32_columns_base_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    x: [Target; N_LIMBS],
+) -> [Target; NUM_INPUT_LIMBS] {
+    let base = builder.constant(F::from_canonical_u32(1 << LIMB_BITS));
+    x.chunks(2)
+        .map(|chunk| builder.mul_add(chunk[1], base, chunk[0]))
         .collect_vec()
         .try_into()
         .unwrap()

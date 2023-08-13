@@ -16,7 +16,7 @@ fn constants(num_io: usize) -> ExpStarkConstants {
     let end_range_check_col = start_range_check_col + num_range_check_cols;
 
     let num_columns = start_lookups_col + 1 + 6 * num_range_check_cols;
-    let num_public_inputs = 37 * NUM_INPUT_LIMBS * num_io;
+    let num_public_inputs = FQ12_EXP_IO_LEN * num_io;
 
     ExpStarkConstants {
         num_columns,
@@ -45,14 +45,22 @@ use plonky2::{
         polynomial::PolynomialValues,
     },
     hash::hash_types::RichField,
-    iop::ext_target::ExtensionTarget,
-    plonk::circuit_builder::CircuitBuilder,
+    iop::{ext_target::ExtensionTarget, target::Target},
+    plonk::{
+        circuit_builder::CircuitBuilder,
+        config::{AlgebraicHasher, GenericConfig},
+    },
     util::transpose,
+};
+use plonky2_bn254::fields::{
+    fq12_target::Fq12Target, fq_target::FqTarget, u256_target::U256Target,
 };
 use starky::{
     config::StarkConfig,
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
     permutation::PermutationPair,
+    proof::StarkProofWithPublicInputsTarget,
+    recursive_verifier::{add_virtual_stark_proof_with_pis, verify_stark_proof_circuit},
     stark::Stark,
     vars::{StarkEvaluationTargets, StarkEvaluationVars},
 };
@@ -67,6 +75,7 @@ use crate::{
         eval_fq12_mul, eval_fq12_mul_circuit, generate_fq12_mul, read_fq12, read_fq12_output,
         write_fq12, write_fq12_output, Fq12Output,
     },
+    input_target::Fq12ExpInputTarget,
     instruction::{vec_equal, vec_equal_circuit},
     native::MyFq12,
     pulse::{
@@ -78,8 +87,8 @@ use crate::{
         generate_split_u16_range_check, split_u16_range_check_pairs,
     },
     utils::{
-        columns_to_fq12, fq_to_columns, fq_to_u32_columns, i64_to_column_positive, read_u32_fq,
-        u16_columns_to_u32_columns, u16_columns_to_u32_columns_circuit, u32_digits_to_biguint,
+        columns_to_fq12, fq_to_columns, fq_to_u16_columns, i64_to_column_positive, read_u16_fq,
+        read_u32_fq, u16_columns_to_u32_columns_base_circuit, u32_digits_to_biguint,
     },
 };
 
@@ -123,29 +132,31 @@ pub struct Fq12ExpIONative {
     pub output: Fq12,
 }
 
-// 37*NUM_INPUT_LIMBS
+const FQ12_EXP_IO_LEN: usize = 36 * N_LIMBS + NUM_INPUT_LIMBS;
+
+// 36*N_LIMBS + NUM_INPUT_LIMBS
 pub struct Fq12ExpIO<F> {
-    pub x: [[F; NUM_INPUT_LIMBS]; 12],
-    pub offset: [[F; NUM_INPUT_LIMBS]; 12],
+    pub x: [[F; N_LIMBS]; 12],
+    pub offset: [[F; N_LIMBS]; 12],
     pub exp_val: [F; NUM_INPUT_LIMBS],
-    pub output: [[F; NUM_INPUT_LIMBS]; 12],
+    pub output: [[F; N_LIMBS]; 12],
 }
 
-pub fn fq12_exp_io_to_columns<F: RichField>(input: &Fq12ExpIONative) -> [F; 37 * NUM_INPUT_LIMBS] {
+pub fn fq12_exp_io_to_columns<F: RichField>(input: &Fq12ExpIONative) -> [F; FQ12_EXP_IO_LEN] {
     let exp_val = input.exp_val.map(F::from_canonical_u32);
     let mut columns = vec![];
     let my_x: MyFq12 = input.x.into();
     let my_offset: MyFq12 = input.offset.into();
     let my_output: MyFq12 = input.output.into();
     my_x.coeffs.iter().for_each(|c| {
-        columns.extend(fq_to_u32_columns::<F>(*c));
+        columns.extend(fq_to_u16_columns::<F>(*c));
     });
     my_offset.coeffs.iter().for_each(|c| {
-        columns.extend(fq_to_u32_columns::<F>(*c));
+        columns.extend(fq_to_u16_columns::<F>(*c));
     });
     columns.extend(exp_val);
     my_output.coeffs.iter().for_each(|c| {
-        columns.extend(fq_to_u32_columns::<F>(*c));
+        columns.extend(fq_to_u16_columns::<F>(*c));
     });
     columns.try_into().unwrap()
 }
@@ -154,10 +165,10 @@ pub fn read_fq12_exp_io<F: Clone + core::fmt::Debug>(
     lv: &[F],
     cur_col: &mut usize,
 ) -> Fq12ExpIO<F> {
-    let x = [(); 12].map(|_| read_u32_fq(lv, cur_col));
-    let offset = [(); 12].map(|_| read_u32_fq(lv, cur_col));
+    let x = [(); 12].map(|_| read_u16_fq(lv, cur_col));
+    let offset = [(); 12].map(|_| read_u16_fq(lv, cur_col));
     let exp_val = read_u32_fq(lv, cur_col);
-    let output = [(); 12].map(|_| read_u32_fq(lv, cur_col));
+    let output = [(); 12].map(|_| read_u16_fq(lv, cur_col));
     Fq12ExpIO {
         x,
         offset,
@@ -388,10 +399,8 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
             let fq12_exp_io = read_fq12_exp_io(pi, &mut cur_col);
             let is_ith_input = lv[get_pulse_col(c.start_io_pulses_col, i)];
             let is_ith_output = lv[get_pulse_col(c.start_io_pulses_col, i + 1)];
-            let x = a.map(u16_columns_to_u32_columns);
-            let b = b.map(u16_columns_to_u32_columns);
             (0..12).for_each(|i| {
-                vec_equal(yield_constr, is_ith_input, &fq12_exp_io.x[i], &x[i]);
+                vec_equal(yield_constr, is_ith_input, &fq12_exp_io.x[i], &a[i]);
                 vec_equal(yield_constr, is_ith_input, &fq12_exp_io.offset[i], &b[i]);
                 vec_equal(yield_constr, is_ith_output, &fq12_exp_io.output[i], &b[i]);
             });
@@ -496,15 +505,13 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
             let fq12_exp_io = read_fq12_exp_io(vars.public_inputs, &mut cur_col);
             let is_ith_input = lv[get_pulse_col(c.start_io_pulses_col, i)];
             let is_ith_output = lv[get_pulse_col(c.start_io_pulses_col, i + 1)];
-            let x = a.map(|x| u16_columns_to_u32_columns_circuit(builder, x));
-            let b = b.map(|x| u16_columns_to_u32_columns_circuit(builder, x));
             (0..12).for_each(|i| {
                 vec_equal_circuit(
                     builder,
                     yield_constr,
                     is_ith_input,
                     &fq12_exp_io.x[i],
-                    &x[i],
+                    &a[i],
                 );
                 vec_equal_circuit(
                     builder,
@@ -635,18 +642,102 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
     }
 }
 
+fn custom_range_check<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    x: &Target,
+) {
+    let base = builder.constant(F::from_canonical_u32(1 << 16));
+    let expected_u32 = builder.mul(*x, base);
+    builder.range_check(expected_u32, 32);
+}
+
+pub(crate) fn fq12_exp_circuit_with_proof_target<
+    F: RichField + Extendable<D>,
+    C: GenericConfig<D, F = F>,
+    const D: usize,
+>(
+    builder: &mut CircuitBuilder<F, D>,
+    log_num_io: usize,
+) -> (
+    Vec<Fq12ExpInputTarget<F, D>>,
+    Vec<Fq12Target<F, D>>,
+    StarkProofWithPublicInputsTarget<D>,
+)
+where
+    <C as GenericConfig<D>>::Hasher: AlgebraicHasher<F>,
+{
+    let num_io = 1 << log_num_io;
+    let stark = Fq12ExpStark::<F, D>::new(num_io);
+    let inner_config = stark.config();
+    let degree_bits = 9 + log_num_io;
+    let starky_proof_t =
+        add_virtual_stark_proof_with_pis(builder, stark, &inner_config, degree_bits);
+    verify_stark_proof_circuit::<F, C, _, D>(builder, stark, &starky_proof_t, &inner_config);
+    assert!(starky_proof_t.public_inputs.len() == FQ12_EXP_IO_LEN * num_io);
+    let mut cur_col = 0;
+    let mut inputs = vec![];
+    let mut outputs = vec![];
+    let pi = starky_proof_t.public_inputs.clone();
+    for _ in 0..num_io {
+        let io = read_fq12_exp_io(&pi, &mut cur_col);
+        let x_coeffs =
+            io.x.iter()
+                .map(|limb| {
+                    // range check
+                    limb.iter().for_each(|l| builder.range_check(*l, 16));
+                    let limb_u32 = u16_columns_to_u32_columns_base_circuit(builder, *limb);
+                    FqTarget::from_limbs(builder, &limb_u32)
+                })
+                .collect_vec();
+        let offset_coeffs = io
+            .offset
+            .iter()
+            .map(|limb| {
+                // range check
+                limb.iter().for_each(|l| builder.range_check(*l, 16));
+                let limb_u32 = u16_columns_to_u32_columns_base_circuit(builder, *limb);
+                FqTarget::from_limbs(builder, &limb_u32)
+            })
+            .collect_vec();
+        let output_coeffs = io
+            .output
+            .iter()
+            .map(|limb| {
+                // range check
+                // limb.iter().for_each(|l| builder.range_check(*l, 16));
+                let limb_u32 = u16_columns_to_u32_columns_base_circuit(builder, *limb);
+                FqTarget::from_limbs(builder, &limb_u32)
+            })
+            .collect_vec();
+        let x = Fq12Target::new(x_coeffs);
+        let offset = Fq12Target::new(offset_coeffs);
+        let output = Fq12Target::new(output_coeffs);
+        let exp_val = U256Target::<F, D>::from_vec(&io.exp_val);
+        let input = Fq12ExpInputTarget { x, offset, exp_val };
+        inputs.push(input);
+        outputs.push(output);
+    }
+    (inputs, outputs, starky_proof_t)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
 
-    use crate::fq12_exp::{Fq12ExpIONative, Fq12ExpStark};
+    use crate::{
+        flags::NUM_INPUT_LIMBS,
+        fq12_exp::{fq12_exp_circuit_with_proof_target, Fq12ExpIONative, Fq12ExpStark},
+        input_target::Fq12ExpInput,
+        utils::u32_digits_to_biguint,
+    };
     use ark_bn254::{Fq12, Fr};
     use ark_ff::Field;
     use ark_std::UniformRand;
     use itertools::Itertools;
     use num_bigint::BigUint;
     use plonky2::{
-        iop::witness::PartialWitness,
+        field::goldilocks_field::GoldilocksField,
+        iop::witness::{PartialWitness, WitnessWrite},
         plonk::{
             circuit_builder::CircuitBuilder,
             circuit_data::CircuitConfig,
@@ -654,6 +745,7 @@ mod tests {
         },
         util::timing::TimingTree,
     };
+    use rand::Rng;
     use starky::{
         prover::prove,
         recursive_verifier::{
@@ -664,7 +756,7 @@ mod tests {
     };
 
     #[test]
-    fn test_fq12_exp() {
+    fn test_fq12_exp_raw() {
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
@@ -707,7 +799,7 @@ mod tests {
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
         println!("end stark proof generation: {:?}", now.elapsed());
 
-        let circuit_config = CircuitConfig::standard_ecc_config();
+        let circuit_config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
         let mut pw = PartialWitness::new();
         let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);
@@ -720,6 +812,104 @@ mod tests {
         println!("start plonky2 proof generation");
         let now = Instant::now();
         let _proof = data.prove(pw).unwrap();
+        println!("end plonky2 proof generation: {:?}", now.elapsed());
+    }
+
+    #[test]
+    fn test_fq12_exp_circuit() {
+        let log_num_io = 4;
+        let num_io = 1 << log_num_io;
+        let mut rng = rand::thread_rng();
+        const D: usize = 2;
+        type C = PoseidonGoldilocksConfig;
+        type F = <C as GenericConfig<D>>::F;
+
+        let circuit_config = CircuitConfig::standard_recursion_config();
+        let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
+        let (inputs_t, outputs_t, starky_proof_t) =
+            fq12_exp_circuit_with_proof_target::<F, C, D>(&mut builder, log_num_io);
+
+        let stark = Fq12ExpStark::<F, D>::new(num_io);
+        let inner_config = stark.config();
+
+        let mut ios = vec![];
+        let mut inputs = vec![];
+        let mut outputs = vec![];
+        for _ in 0..num_io {
+            let exp_val: [u32; NUM_INPUT_LIMBS] = rand::random();
+            let exp_val_b = u32_digits_to_biguint(&exp_val);
+            let x = Fq12::rand(&mut rng);
+            let offset = Fq12::rand(&mut rng);
+            let output: Fq12 = offset * x.pow(&exp_val_b.to_u64_digits());
+            let input = Fq12ExpInput {
+                x,
+                offset,
+                exp_val: u32_digits_to_biguint(&exp_val),
+            };
+            let io = Fq12ExpIONative {
+                x,
+                offset,
+                exp_val,
+                output,
+            };
+            inputs.push(input);
+            outputs.push(output);
+            ios.push(io);
+        }
+
+        let trace = stark.generate_trace(&ios);
+        let pi = stark.generate_public_inputs(&ios);
+        let inner_proof = prove::<F, C, _, D>(
+            stark,
+            &inner_config,
+            trace,
+            pi.try_into().unwrap(),
+            &mut TimingTree::default(),
+        )
+        .unwrap();
+        verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
+
+        dbg!(builder.num_gates());
+        let data = builder.build::<C>();
+        dbg!(&data.common);
+
+        let mut pw = PartialWitness::<F>::new();
+        set_stark_proof_with_pis_target(&mut pw, &starky_proof_t, &inner_proof);
+        inputs_t.iter().zip(inputs.iter()).for_each(|(t, w)| {
+            t.set_witness(&mut pw, w);
+        });
+        outputs_t.iter().zip(outputs.iter()).for_each(|(t, w)| {
+            t.set_witness(&mut pw, w);
+        });
+        let now = Instant::now();
+        let _proof = data.prove(pw).unwrap();
+        println!("end plonky2 proof generation: {:?}", now.elapsed());
+    }
+
+    #[test]
+    fn test_plonky2_range_check() {
+        const D: usize = 2;
+        type C = PoseidonGoldilocksConfig;
+        type F = GoldilocksField;
+        let mut rng = rand::thread_rng();
+        const N: usize = 9216;
+        let vec = [(); N].map(|_| rng.gen::<u16>());
+
+        let circuit_config = CircuitConfig::standard_recursion_config();
+        let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
+        let targets = builder.add_virtual_target_arr::<N>();
+        targets.iter().for_each(|x| builder.range_check(*x, 16));
+
+        dbg!(builder.num_gates());
+        let data = builder.build::<C>();
+
+        let now = Instant::now();
+        let mut pw = PartialWitness::<F>::new();
+        use plonky2::field::types::Field;
+        targets.iter().zip(vec.iter()).for_each(|(t, w)| {
+            pw.set_target(*t, F::from_canonical_u64(*w as u64));
+        });
+        let _proof = data.prove(pw);
         println!("end plonky2 proof generation: {:?}", now.elapsed());
     }
 }
