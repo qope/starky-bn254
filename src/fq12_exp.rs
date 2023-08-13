@@ -1,7 +1,7 @@
 //    a       |      b       |   output   |  flags   | rotate_witness |  io_pulses   |     lookups         |
 // 12*N_LIMBS |  12*N_LIMBS  | 84*N_LIMBS |   14     |       2        |  1+4*c.num_io  | 1+6*NUM_RANGE_CHECK |
-//<------------------------------------------------>main_cols: 108*N_LIMBS + 14
-//<----------------------------------->range_check(start: 0, end: 108*N_LIMBS-12))
+//<------------------------------------------------->main_cols: 108*N_LIMBS + 14
+//                           <--------->range_check(start: 24*N_LIMBS, end: 108*N_LIMBS-12))
 
 fn constants(num_io: usize) -> ExpStarkConstants {
     let start_flags_col = 108 * N_LIMBS;
