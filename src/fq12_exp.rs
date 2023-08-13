@@ -45,7 +45,7 @@ use plonky2::{
         polynomial::PolynomialValues,
     },
     hash::hash_types::RichField,
-    iop::{ext_target::ExtensionTarget, target::Target},
+    iop::ext_target::ExtensionTarget,
     plonk::{
         circuit_builder::CircuitBuilder,
         config::{AlgebraicHasher, GenericConfig},

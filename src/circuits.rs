@@ -550,6 +550,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use ark_bn254::{Fq12, Fr, G1Affine, G2Affine};
     use ark_ec::AffineRepr;
     use ark_ff::Field;
@@ -762,6 +764,9 @@ mod tests {
         for i in 1..num_io {
             Fq12Target::connect(&mut builder, &inputs_t[i].offset, &outputs_t[i - 1]);
         }
+        let data = builder.build::<C>();
+
+        let now = Instant::now();
         let mut pw = PartialWitness::<F>::new();
         let xs = (0..num_io).map(|_| Fq12::rand(&mut rng)).collect_vec();
         let exp_vals: Vec<BigUint> = (0..num_io)
@@ -783,7 +788,8 @@ mod tests {
         }
         let output = outputs_t.last().unwrap();
         output.set_witness(&mut pw, &expected);
-        let data = builder.build::<C>();
+
         let _proof = data.prove(pw).unwrap();
+        println!("Fq12 msm time: {:?}", now.elapsed());
     }
 }
