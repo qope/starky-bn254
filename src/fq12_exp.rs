@@ -642,15 +642,6 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
     }
 }
 
-fn custom_range_check<F: RichField + Extendable<D>, const D: usize>(
-    builder: &mut CircuitBuilder<F, D>,
-    x: &Target,
-) {
-    let base = builder.constant(F::from_canonical_u32(1 << 16));
-    let expected_u32 = builder.mul(*x, base);
-    builder.range_check(expected_u32, 32);
-}
-
 pub(crate) fn fq12_exp_circuit_with_proof_target<
     F: RichField + Extendable<D>,
     C: GenericConfig<D, F = F>,
