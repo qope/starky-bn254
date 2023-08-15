@@ -466,9 +466,6 @@ const START_RANGE_CHECK: usize = 4 * N_LIMBS;
 const NUM_RANGE_CHECKS: usize = 20 * N_LIMBS - 4;
 const END_RANGE_CHECK: usize = START_RANGE_CHECK + NUM_RANGE_CHECKS;
 
-const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECKS;
-const PUBLIC_INPUTS: usize = 0;
-
 #[derive(Clone, Copy)]
 pub struct G1Stark<F: RichField + Extendable<D>, const D: usize> {
     _phantom: PhantomData<F>,
