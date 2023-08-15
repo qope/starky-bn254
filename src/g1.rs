@@ -647,7 +647,11 @@ mod tests {
         verifier::verify_stark_proof,
     };
 
-    use crate::g1::{G1Stark, COLUMNS, PUBLIC_INPUTS};
+    use crate::g1::G1Stark;
+
+    use super::{MAIN_COLS, NUM_RANGE_CHECKS};
+    const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECKS;
+    const PUBLIC_INPUTS: usize = 0;
 
     #[test]
     fn test_g1_mul() {
