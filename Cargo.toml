@@ -19,7 +19,7 @@ plonky2_maybe_rayon = {git="https://github.com/InternetMaximalism/plonky2", rev=
 plonky2={git="https://github.com/InternetMaximalism/plonky2", rev="541e127"}
 plonky2_u32={git="https://github.com/InternetMaximalism/plonky2", rev="541e127"}
 starky ={git="https://github.com/InternetMaximalism/plonky2", rev="541e127"}
-plonky2-bn254={git="https://github.com/qope/plonky2-bn254.git", rev="3ffb1c2"}
+plonky2-bn254={git="https://github.com/qope/plonky2-bn254.git", rev="d616d57"}
 static_assertions = "1.1.0"
 num = "0.4.0"
 num-bigint = "0.4.3"
