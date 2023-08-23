@@ -4,6 +4,7 @@ pub mod constants;
 pub mod flags;
 pub mod fq12;
 pub mod fq12_exp;
+pub mod fq12_exp_u64;
 pub mod fq2;
 pub mod g1;
 pub mod g1_exp;

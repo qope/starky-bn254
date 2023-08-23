@@ -2,9 +2,12 @@ use std::marker::PhantomData;
 
 use crate::{
     fq12_exp::{fq12_exp_circuit_with_proof_target, Fq12ExpIONative, Fq12ExpStark},
+    fq12_exp_u64::fq12_exp_u64::{
+        fq12_exp_u64_circuit_with_proof_target, Fq12ExpU64IONative, Fq12ExpU64Stark,
+    },
     g1_exp::{g1_exp_circuit_with_proof_target, G1ExpIONative, G1ExpStark},
     g2_exp::{g2_exp_circuit_with_proof_target, G2ExpIONative, G2ExpStark},
-    input_target::{Fq12ExpInputTarget, G1ExpInputTarget, G2ExpInputTarget},
+    input_target::{Fq12ExpInputTarget, Fq12ExpU64InputTarget, G1ExpInputTarget, G2ExpInputTarget},
     native::MyFq12,
     utils::u32_digits_to_biguint,
 };
@@ -429,6 +432,135 @@ where
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct Fq12ExpU64OutputGenerator<F: RichField + Extendable<D>, const D: usize> {
+    pub input: Fq12ExpU64InputTarget<F, D>,
+    pub output: Fq12Target<F, D>,
+}
+
+impl<F, const D: usize> SimpleGenerator<F> for Fq12ExpU64OutputGenerator<F, D>
+where
+    F: RichField + Extendable<D>,
+{
+    fn dependencies(&self) -> Vec<Target> {
+        self.input.to_vec()
+    }
+
+    fn run_once(&self, pw: &PartitionWitness<F>, out_buffer: &mut GeneratedValues<F>) {
+        let x_coeffs: [Fq; 12] = self
+            .input
+            .x
+            .clone()
+            .coeffs
+            .map(|x| get_biguint(pw, &x.to_vec()).into());
+        let x: Fq12 = MyFq12 { coeffs: x_coeffs }.into();
+        let offset_coeffs = self
+            .input
+            .offset
+            .clone()
+            .coeffs
+            .map(|x| get_biguint(pw, &x.to_vec()).into());
+        let offset: Fq12 = MyFq12 {
+            coeffs: offset_coeffs,
+        }
+        .into();
+        let exp_val = pw.get_target(self.input.exp_val).to_canonical_u64();
+        let output = offset * x.pow(&[exp_val]);
+        self.output.set_witness(out_buffer, &output);
+    }
+
+    fn id(&self) -> String {
+        "Fq12ExpU64OutputGenerator".to_string()
+    }
+    fn serialize(&self, _dst: &mut Vec<u8>) -> plonky2::util::serialization::IoResult<()> {
+        todo!()
+    }
+    fn deserialize(_src: &mut Buffer) -> plonky2::util::serialization::IoResult<Self> {
+        todo!()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Fq12ExpU64StarkyProofGenerator<
+    F: RichField + Extendable<D>,
+    C: GenericConfig<D, F = F>,
+    const D: usize,
+> {
+    pub inputs: Vec<Fq12ExpU64InputTarget<F, D>>,
+    pub outputs: Vec<Fq12Target<F, D>>,
+    pub starky_proof: StarkProofWithPublicInputsTarget<D>,
+    _config: std::marker::PhantomData<C>,
+}
+
+impl<F, C, const D: usize> SimpleGenerator<F> for Fq12ExpU64StarkyProofGenerator<F, C, D>
+where
+    F: RichField + Extendable<D>,
+    C: GenericConfig<D, F = F> + 'static,
+    C::Hasher: AlgebraicHasher<F>,
+{
+    fn dependencies(&self) -> Vec<Target> {
+        let mut targets = vec![];
+        self.inputs.iter().cloned().for_each(|input| {
+            targets.extend(input.to_vec());
+        });
+        targets
+    }
+    fn run_once(&self, pw: &PartitionWitness<F>, out_buffer: &mut GeneratedValues<F>) {
+        let ios_native = self
+            .inputs
+            .iter()
+            .cloned()
+            .map(|input| {
+                let x_coeffs: [Fq; 12] =
+                    input.x.coeffs.map(|x| get_biguint(pw, &x.to_vec()).into());
+                let x: Fq12 = MyFq12 { coeffs: x_coeffs }.into();
+                let offset_coeffs = input
+                    .offset
+                    .coeffs
+                    .map(|x| get_biguint(pw, &x.to_vec()).into());
+                let offset: Fq12 = MyFq12 {
+                    coeffs: offset_coeffs,
+                }
+                .into();
+                let exp_val = pw.get_target(input.exp_val).to_canonical_u64();
+                let output = offset * x.pow(&[exp_val]);
+                Fq12ExpU64IONative {
+                    x,
+                    offset,
+                    exp_val,
+                    output,
+                }
+            })
+            .collect_vec();
+
+        let num_io = ios_native.len();
+        let stark = Fq12ExpU64Stark::<F, D>::new(num_io);
+        let inner_config = stark.config();
+        let trace = stark.generate_trace(&ios_native);
+        let pi = stark.generate_public_inputs(&ios_native);
+        let inner_proof = prove::<F, C, _, D>(
+            stark,
+            &inner_config,
+            trace,
+            pi.try_into().unwrap(),
+            &mut TimingTree::default(),
+        )
+        .unwrap();
+        verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
+        set_stark_proof_with_pis_target(out_buffer, &self.starky_proof, &inner_proof);
+    }
+
+    fn id(&self) -> String {
+        "Fq12ExpU64StarkyProofGenerator".to_string()
+    }
+    fn serialize(&self, _dst: &mut Vec<u8>) -> plonky2::util::serialization::IoResult<()> {
+        todo!()
+    }
+    fn deserialize(_src: &mut Buffer) -> plonky2::util::serialization::IoResult<Self> {
+        todo!()
+    }
+}
+
 pub fn g1_exp_circuit<
     F: RichField + Extendable<D>,
     C: GenericConfig<D, F = F> + 'static,
@@ -548,6 +680,45 @@ where
     outputs
 }
 
+pub fn fq12_exp_u64_circuit<
+    F: RichField + Extendable<D>,
+    C: GenericConfig<D, F = F> + 'static,
+    const D: usize,
+>(
+    builder: &mut CircuitBuilder<F, D>,
+    inputs: &[Fq12ExpU64InputTarget<F, D>],
+) -> Vec<Fq12Target<F, D>>
+where
+    C::Hasher: AlgebraicHasher<F>,
+{
+    assert!(inputs.len().is_power_of_two());
+    let log_num_io = inputs.len().trailing_zeros() as usize;
+
+    let (inputs_constr, outputs, starky_proof) =
+        fq12_exp_u64_circuit_with_proof_target::<F, C, D>(builder, log_num_io);
+
+    for (input_c, input) in inputs_constr.iter().zip(inputs.iter()) {
+        Fq12ExpU64InputTarget::connect(builder, input_c, input);
+    }
+
+    for (input, output) in inputs.iter().zip(outputs.iter()) {
+        let output_generator = Fq12ExpU64OutputGenerator {
+            input: input.to_owned(),
+            output: output.to_owned(),
+        };
+        builder.add_simple_generator(output_generator);
+    }
+
+    let proof_generator = Fq12ExpU64StarkyProofGenerator::<F, C, D> {
+        inputs: inputs.to_vec(),
+        outputs: outputs.clone(),
+        starky_proof,
+        _config: PhantomData,
+    };
+    builder.add_simple_generator(proof_generator);
+    outputs
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
@@ -560,8 +731,11 @@ mod tests {
     use num_bigint::BigUint;
     use num_traits::One;
     use plonky2::{
-        field::goldilocks_field::GoldilocksField,
-        iop::witness::PartialWitness,
+        field::{
+            goldilocks_field::GoldilocksField,
+            types::{PrimeField64, Sample},
+        },
+        iop::witness::{PartialWitness, WitnessWrite},
         plonk::{
             circuit_builder::CircuitBuilder, circuit_data::CircuitConfig,
             config::PoseidonGoldilocksConfig,
@@ -573,9 +747,12 @@ mod tests {
     };
 
     use crate::{
-        circuits::{fq12_exp_circuit, g1_exp_circuit, g2_exp_circuit},
+        circuits::{fq12_exp_circuit, fq12_exp_u64_circuit, g1_exp_circuit, g2_exp_circuit},
         flags::NUM_INPUT_LIMBS,
-        input_target::{Fq12ExpInputTarget, G1ExpInput, G1ExpInputTarget, G2ExpInputTarget},
+        input_target::{
+            Fq12ExpInputTarget, Fq12ExpU64InputTarget, G1ExpInput, G1ExpInputTarget,
+            G2ExpInputTarget,
+        },
         utils::u32_digits_to_biguint,
     };
 
@@ -791,5 +968,60 @@ mod tests {
 
         let _proof = data.prove(pw).unwrap();
         println!("Fq12 msm time: {:?}", now.elapsed());
+    }
+
+    #[test]
+    fn test_fq12_u64_msm() {
+        let mut rng = rand::thread_rng();
+        type F = GoldilocksField;
+        type C = PoseidonGoldilocksConfig;
+        const D: usize = 2;
+        let log_num_io = 2;
+        let num_io = 1 << log_num_io;
+
+        let config = CircuitConfig::standard_ecc_config();
+        let mut builder = CircuitBuilder::<F, D>::new(config);
+        let inputs_t = (0..num_io)
+            .map(|_| {
+                let x = Fq12Target::empty(&mut builder);
+                let offset = Fq12Target::empty(&mut builder);
+                let exp_val = builder.add_virtual_target();
+                Fq12ExpU64InputTarget { x, offset, exp_val }
+            })
+            .collect_vec();
+        let outputs_t = fq12_exp_u64_circuit::<F, C, D>(&mut builder, &inputs_t);
+
+        let one = Fq12Target::constant(&mut builder, Fq12::one());
+        Fq12Target::connect(&mut builder, &inputs_t[0].offset, &one);
+        for i in 1..num_io {
+            Fq12Target::connect(&mut builder, &inputs_t[i].offset, &outputs_t[i - 1]);
+        }
+        let data = builder.build::<C>();
+
+        let now = Instant::now();
+        let mut pw = PartialWitness::<F>::new();
+        let xs = (0..num_io).map(|_| Fq12::rand(&mut rng)).collect_vec();
+        let exp_vals: Vec<u64> = (0..num_io)
+            .map(|_| {
+                let exp_val_f = F::sample(&mut rng);
+                exp_val_f.to_canonical_u64()
+            })
+            .collect_vec();
+        let expected = {
+            let mut total = Fq12::one();
+            for i in 0..num_io {
+                total = total * xs[i].pow(&[exp_vals[i]]);
+            }
+            total
+        };
+        use plonky2::field::types::Field;
+        for i in 0..num_io {
+            inputs_t[i].x.set_witness(&mut pw, &xs[i]);
+            pw.set_target(inputs_t[i].exp_val, F::from_canonical_u64(exp_vals[i]));
+        }
+        let output = outputs_t.last().unwrap();
+        output.set_witness(&mut pw, &expected);
+        let _proof = data.prove(pw).unwrap();
+        println!("Fq12 u64 msm time: {:?}", now.elapsed());
     }
 }

@@ -1,7 +1,7 @@
 pub const LIMB_BITS: usize = 16;
 pub const N_LIMBS: usize = 16;
 
-pub struct ExpStarkConstants {
+pub struct ExpU64StarkConstants {
     pub num_columns: usize,
     pub num_public_inputs: usize,
     pub num_main_cols: usize,

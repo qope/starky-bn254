@@ -1,14 +1,26 @@
-//    a       |      b       |   output   |  flags   | rotate_witness |  io_pulses   |     lookups         |
-// 12*N_LIMBS |  12*N_LIMBS  | 84*N_LIMBS |   14     |       2        |  1+4*c.num_io  | 1+6*NUM_RANGE_CHECK |
-//<------------------------------------------------->main_cols: 108*N_LIMBS + 14
+//    a       |      b       |   output   |  flag  |  io_pulses     |     lookups         |
+// 12*N_LIMBS |  12*N_LIMBS  | 84*N_LIMBS |   6    |  1+4*c.num_io  | 1+6*NUM_RANGE_CHECK |
+//<------------------------------------------------->main_cols: 108*N_LIMBS + 6
 //                           <--------->range_check(start: 24*N_LIMBS, end: 108*N_LIMBS-12))
+
+pub struct ExpU64StarkConstants {
+    pub num_columns: usize,
+    pub num_public_inputs: usize,
+    pub num_main_cols: usize,
+    pub num_io: usize,
+    pub start_flags_col: usize,
+    pub start_io_pulses_col: usize,
+    pub start_lookups_col: usize,
+    pub start_range_check_col: usize,
+    pub end_range_check_col: usize,
+    pub num_range_check_cols: usize,
+}
 
 fn constants(num_io: usize) -> ExpU64StarkConstants {
     let start_flags_col = 108 * N_LIMBS;
-    let num_main_cols = start_flags_col + NUM_FLAGS_COLS;
+    let num_main_cols = start_flags_col + NUM_FLAGS_U64_COLS;
 
-    let start_periodic_pulse_col = num_main_cols;
-    let start_io_pulses_col = start_periodic_pulse_col + 2;
+    let start_io_pulses_col = num_main_cols;
     let start_lookups_col = start_io_pulses_col + 1 + 4 * num_io;
 
     let start_range_check_col = 24 * N_LIMBS;
@@ -16,7 +28,7 @@ fn constants(num_io: usize) -> ExpU64StarkConstants {
     let end_range_check_col = start_range_check_col + num_range_check_cols;
 
     let num_columns = start_lookups_col + 1 + 6 * num_range_check_cols;
-    let num_public_inputs = FQ12_EXP_IO_LEN * num_io;
+    let num_public_inputs = FQ12_EXP_U64_IO_LEN * num_io;
 
     ExpU64StarkConstants {
         num_columns,
@@ -24,7 +36,6 @@ fn constants(num_io: usize) -> ExpU64StarkConstants {
         num_main_cols,
         num_io,
         start_flags_col,
-        start_periodic_pulse_col,
         start_io_pulses_col,
         start_lookups_col,
         start_range_check_col,
@@ -45,16 +56,13 @@ use plonky2::{
         polynomial::PolynomialValues,
     },
     hash::hash_types::RichField,
-    iop::ext_target::ExtensionTarget,
     plonk::{
         circuit_builder::CircuitBuilder,
         config::{AlgebraicHasher, GenericConfig},
     },
     util::transpose,
 };
-use plonky2_bn254::fields::{
-    fq12_target::Fq12Target, fq_target::FqTarget, u256_target::U256Target,
-};
+use plonky2_bn254::fields::{fq12_target::Fq12Target, fq_target::FqTarget};
 use starky::{
     config::StarkConfig,
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
@@ -66,84 +74,50 @@ use starky::{
 };
 
 use crate::{
-    constants::{ExpU64StarkConstants, N_LIMBS},
-    flags::{
-        eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
-        INPUT_LIMB_BITS, NUM_FLAGS_COLS, NUM_INPUT_LIMBS,
-    },
+    constants::N_LIMBS,
     fq12::{
         eval_fq12_mul, eval_fq12_mul_circuit, generate_fq12_mul, read_fq12, read_fq12_output,
         write_fq12, write_fq12_output, Fq12Output,
     },
-    input_target::Fq12ExpInputTarget,
+    fq12_exp::{fq12_equal_transition, fq12_equal_transition_circuit},
+    fq12_exp_u64::flags_u64::{generate_flags_u64_first_row, generate_flags_u64_next_row},
+    input_target::Fq12ExpU64InputTarget,
     instruction::{vec_equal, vec_equal_circuit},
     native::MyFq12,
-    pulse::{
-        eval_periodic_pulse, eval_periodic_pulse_circuit, eval_pulse, eval_pulse_circuit,
-        generate_periodic_pulse_witness, generate_pulse, get_pulse_col,
-    },
+    pulse::{eval_pulse, eval_pulse_circuit, generate_pulse, get_pulse_col},
     range_check::{
         eval_split_u16_range_check, eval_split_u16_range_check_circuit,
         generate_split_u16_range_check, split_u16_range_check_pairs,
     },
     utils::{
         columns_to_fq12, fq_to_columns, fq_to_u16_columns, i64_to_column_positive, read_u16_fq,
-        read_u32_fq, u16_columns_to_u32_columns_base_circuit, u32_digits_to_biguint,
+        u16_columns_to_u32_columns_base_circuit,
     },
 };
 
-pub fn fq12_equal_transition<P: PackedField>(
-    yield_constr: &mut ConstraintConsumer<P>,
-    filter: P,
-    x: [[P; N_LIMBS]; 12],
-    y: [[P; N_LIMBS]; 12],
-) {
-    (0..12).for_each(|i| {
-        let x_i = x[i];
-        let y_i = y[i];
-        x_i.iter()
-            .zip(y_i.iter())
-            .for_each(|(&x, &y)| yield_constr.constraint_transition(filter * (x - y)));
-    });
-}
+use super::flags_u64::{eval_flags_u64, eval_flags_u64_circuit, NUM_FLAGS_U64_COLS};
 
-pub fn fq12_equal_transition_circuit<F: RichField + Extendable<D>, const D: usize>(
-    builder: &mut CircuitBuilder<F, D>,
-    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
-    filter: ExtensionTarget<D>,
-    x: [[ExtensionTarget<D>; N_LIMBS]; 12],
-    y: [[ExtensionTarget<D>; N_LIMBS]; 12],
-) {
-    (0..12).for_each(|i| {
-        let x_i = x[i];
-        let y_i = y[i];
-        x_i.iter().zip(y_i.iter()).for_each(|(&x, &y)| {
-            let diff = builder.sub_extension(x, y);
-            let t = builder.mul_extension(filter, diff);
-            yield_constr.constraint_transition(builder, t);
-        });
-    });
-}
-
-pub struct Fq12ExpIONative {
+pub struct Fq12ExpU64IONative {
     pub x: Fq12,
     pub offset: Fq12,
-    pub exp_val: [u32; NUM_INPUT_LIMBS],
+    pub exp_val: u64,
     pub output: Fq12,
 }
 
-const FQ12_EXP_IO_LEN: usize = 36 * N_LIMBS + NUM_INPUT_LIMBS;
+const FQ12_EXP_U64_IO_LEN: usize = 36 * N_LIMBS + 1;
 
 // 36*N_LIMBS + NUM_INPUT_LIMBS
-pub struct Fq12ExpIO<F> {
+pub struct Fq12ExpU64IO<F> {
     pub x: [[F; N_LIMBS]; 12],
     pub offset: [[F; N_LIMBS]; 12],
-    pub exp_val: [F; NUM_INPUT_LIMBS],
+    pub exp_val: F,
     pub output: [[F; N_LIMBS]; 12],
 }
 
-pub fn fq12_exp_io_to_columns<F: RichField>(input: &Fq12ExpIONative) -> [F; FQ12_EXP_IO_LEN] {
-    let exp_val = input.exp_val.map(F::from_canonical_u32);
+pub fn fq12_exp_u64_io_to_columns<F: RichField>(
+    input: &Fq12ExpU64IONative,
+) -> [F; FQ12_EXP_U64_IO_LEN] {
+    let exp_val = F::from_canonical_u64(input.exp_val);
     let mut columns = vec![];
     let my_x: MyFq12 = input.x.into();
     let my_offset: MyFq12 = input.offset.into();
@@ -154,22 +128,23 @@ pub fn fq12_exp_io_to_columns<F: RichField>(input: &Fq12ExpIONative) -> [F; FQ12
     my_offset.coeffs.iter().for_each(|c| {
         columns.extend(fq_to_u16_columns::<F>(*c));
     });
-    columns.extend(exp_val);
+    columns.push(exp_val);
     my_output.coeffs.iter().for_each(|c| {
         columns.extend(fq_to_u16_columns::<F>(*c));
     });
     columns.try_into().unwrap()
 }
 
-pub fn read_fq12_exp_io<F: Clone + core::fmt::Debug>(
+pub fn read_fq12_exp_u64_io<F: Clone + core::fmt::Debug>(
     lv: &[F],
     cur_col: &mut usize,
-) -> Fq12ExpIO<F> {
+) -> Fq12ExpU64IO<F> {
     let x = [(); 12].map(|_| read_u16_fq(lv, cur_col));
     let offset = [(); 12].map(|_| read_u16_fq(lv, cur_col));
-    let exp_val = read_u32_fq(lv, cur_col);
+    let exp_val = lv[*cur_col].clone();
+    *cur_col += 1;
     let output = [(); 12].map(|_| read_u16_fq(lv, cur_col));
-    Fq12ExpIO {
+    Fq12ExpU64IO {
         x,
         offset,
         exp_val,
@@ -177,13 +152,13 @@ pub fn read_fq12_exp_io<F: Clone + core::fmt::Debug>(
     }
 }
 
-pub fn generate_fq12_exp_first_row<F: RichField>(
+pub fn generate_fq12_exp_u64_first_row<F: RichField>(
     lv: &mut [F],
     start_flag_col: usize,
     x: Fq12,
     offset: Fq12,
 ) {
-    let is_mul_col = start_flag_col + 4;
+    let is_mul_col = start_flag_col + 3;
     let a: MyFq12 = x.into();
     let b: MyFq12 = offset.into();
     let a = a
@@ -215,9 +190,9 @@ pub fn generate_fq12_exp_first_row<F: RichField>(
     write_fq12_output(lv, &output, &mut cur_col);
 }
 
-pub fn generate_fq12_exp_next_row<F: RichField>(lv: &[F], nv: &mut [F], start_flag_col: usize) {
-    let is_sq_col = start_flag_col + 2;
-    let is_mul_col = start_flag_col + 4;
+pub fn generate_fq12_exp_u64_next_row<F: RichField>(lv: &[F], nv: &mut [F], start_flag_col: usize) {
+    let is_sq_col = start_flag_col + 1;
+    let is_mul_col = start_flag_col + 3;
 
     let mut cur_col = 0;
     let a = read_fq12(lv, &mut cur_col);
@@ -251,8 +226,8 @@ pub fn generate_fq12_exp_next_row<F: RichField>(lv: &[F], nv: &mut [F], start_fl
     write_fq12_output(nv, &next_output, &mut cur_col);
 }
 
-pub fn get_pulse_positions(num_io: usize) -> Vec<usize> {
-    let num_rows_per_block = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
+pub fn get_pulse_u64_positions(num_io: usize) -> Vec<usize> {
+    let num_rows_per_block = 2 * 64;
     let mut pulse_positions = vec![];
     for i in 0..num_io {
         pulse_positions.extend(vec![
@@ -264,12 +239,12 @@ pub fn get_pulse_positions(num_io: usize) -> Vec<usize> {
 }
 
 #[derive(Clone, Copy)]
-pub struct Fq12ExpStark<F: RichField + Extendable<D>, const D: usize> {
+pub struct Fq12ExpU64Stark<F: RichField + Extendable<D>, const D: usize> {
     pub num_io: usize,
     _phantom: PhantomData<F>,
 }
 
-impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
+impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpU64Stark<F, D> {
     pub fn new(num_io: usize) -> Self {
         Self {
             num_io,
@@ -286,22 +261,17 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
         StarkConfig::standard_fast_config(c.num_columns, c.num_public_inputs)
     }
 
-    pub fn generate_trace_for_one_block(
-        &self,
-        x: Fq12,
-        offset: Fq12,
-        exp_val: [u32; NUM_INPUT_LIMBS],
-    ) -> Vec<Vec<F>> {
+    pub fn generate_trace_for_one_block(&self, x: Fq12, offset: Fq12, exp_val: u64) -> Vec<Vec<F>> {
         let c = self.constants();
-        let num_rows = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
+        let num_rows = 2 * 64;
         let mut lv = vec![F::ZERO; c.num_main_cols];
-        generate_flags_first_row(&mut lv, c.start_flags_col, exp_val);
-        generate_fq12_exp_first_row(&mut lv, c.start_flags_col, x, offset);
+        generate_flags_u64_first_row(&mut lv, c.start_flags_col, exp_val);
+        generate_fq12_exp_u64_first_row(&mut lv, c.start_flags_col, x, offset);
         let mut rows = vec![lv.clone()];
         for i in 0..num_rows - 1 {
             let mut nv = vec![F::ZERO; lv.len()];
-            generate_flags_next_row(&lv, &mut nv, i, c.start_flags_col);
-            generate_fq12_exp_next_row(&lv, &mut nv, c.start_flags_col);
+            generate_flags_u64_next_row(&lv, &mut nv, i, c.start_flags_col);
+            generate_fq12_exp_u64_next_row(&lv, &mut nv, c.start_flags_col);
             rows.push(nv.clone());
             lv = nv;
         }
@@ -312,14 +282,13 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
             columns_to_fq12(b)
         };
         // assertion
-        let exp_val_biguint = u32_digits_to_biguint(&exp_val);
-        let expected: Fq12 = offset * x.pow(&exp_val_biguint.to_u64_digits());
+        let expected: Fq12 = offset * x.pow(&[exp_val]);
         assert!(output == expected);
 
         rows
     }
 
-    pub fn generate_trace(&self, inputs: &[Fq12ExpIONative]) -> Vec<PolynomialValues<F>> {
+    pub fn generate_trace(&self, inputs: &[Fq12ExpU64IONative]) -> Vec<PolynomialValues<F>> {
         let c = self.constants();
         assert!(inputs.len() == c.num_io);
 
@@ -330,15 +299,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
         }
         let mut trace_cols = transpose(&rows.iter().map(|v| v.to_vec()).collect_vec());
 
-        let rotation_period = 2 * INPUT_LIMB_BITS;
-        generate_periodic_pulse_witness(
-            &mut trace_cols,
-            c.start_flags_col + 1,
-            rotation_period,
-            rotation_period - 2,
-        );
-
-        generate_pulse(&mut trace_cols, get_pulse_positions(c.num_io));
+        generate_pulse(&mut trace_cols, get_pulse_u64_positions(c.num_io));
         generate_split_u16_range_check(
             c.start_range_check_col..c.end_range_check_col,
             &mut trace_cols,
@@ -350,15 +311,15 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
             .collect()
     }
 
-    pub fn generate_public_inputs(&self, inputs: &[Fq12ExpIONative]) -> Vec<F> {
+    pub fn generate_public_inputs(&self, inputs: &[Fq12ExpU64IONative]) -> Vec<F> {
         inputs
             .iter()
-            .flat_map(|input| fq12_exp_io_to_columns::<F>(input))
+            .flat_map(|input| fq12_exp_u64_io_to_columns::<F>(input))
             .collect_vec()
     }
 }
 
-impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<F, D> {
+impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpU64Stark<F, D> {
     fn eval_packed_generic<FE, P, const D2: usize>(
         &self,
         vars: StarkEvaluationVars<FE, P>,
@@ -369,9 +330,9 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
     {
         let c = self.constants();
         let is_final_col = c.start_flags_col;
-        let is_sq_col = c.start_flags_col + 2;
-        let is_mul_col = c.start_flags_col + 4;
-        let start_limbs_col = c.start_flags_col + 6;
+        let is_sq_col = c.start_flags_col + 1;
+        let is_mul_col = c.start_flags_col + 3;
+        let exp_val_col = c.start_flags_col + 5;
 
         let lv = vars.local_values;
         let nv = vars.next_values;
@@ -396,7 +357,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         let pi: &[P] = &vars.public_inputs.iter().map(|&x| x.into()).collect_vec();
         cur_col = 0;
         for i in (0..2 * c.num_io).step_by(2) {
-            let fq12_exp_io = read_fq12_exp_io(pi, &mut cur_col);
+            let fq12_exp_io = read_fq12_exp_u64_io(pi, &mut cur_col);
             let is_ith_input = lv[get_pulse_col(c.start_io_pulses_col, i)];
             let is_ith_output = lv[get_pulse_col(c.start_io_pulses_col, i + 1)];
             (0..12).for_each(|i| {
@@ -405,9 +366,8 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
                 vec_equal(yield_constr, is_ith_output, &fq12_exp_io.output[i], &b[i]);
             });
             let bit = is_mul;
-            let mut limbs = lv[start_limbs_col..start_limbs_col + NUM_INPUT_LIMBS].to_vec();
-            limbs[0] = limbs[0] * P::Scalar::TWO + bit;
-            vec_equal(yield_constr, is_ith_input, &fq12_exp_io.exp_val, &limbs);
+            let recovered = lv[exp_val_col] * P::Scalar::TWO + bit;
+            yield_constr.constraint(is_ith_input * (fq12_exp_io.exp_val - recovered));
         }
 
         // transition
@@ -430,32 +390,23 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
             fq12_equal_transition(yield_constr, is_not_final * is_sq_nor_mul, next_a, a);
             fq12_equal_transition(yield_constr, is_not_final * is_sq_nor_mul, next_b, b);
         }
-        eval_flags(yield_constr, lv, nv, c.start_flags_col);
+        eval_flags_u64(yield_constr, lv, nv, c.start_flags_col);
         eval_fq12_mul(yield_constr, is_sq, a, a, &output);
         eval_fq12_mul(yield_constr, is_mul, a, b, &output);
 
-        // flags, pulses, and lookup
-        eval_flags(
+        // flags and lookup
+        eval_flags_u64(
             yield_constr,
             vars.local_values,
             vars.next_values,
             c.start_flags_col,
-        );
-        eval_periodic_pulse(
-            yield_constr,
-            vars.local_values,
-            vars.next_values,
-            c.start_flags_col + 1,
-            c.start_periodic_pulse_col,
-            2 * INPUT_LIMB_BITS,
-            2 * INPUT_LIMB_BITS - 2,
         );
         eval_pulse(
             yield_constr,
             vars.local_values,
             vars.next_values,
             c.start_io_pulses_col,
-            get_pulse_positions(c.num_io),
+            get_pulse_u64_positions(c.num_io),
         );
         eval_split_u16_range_check(
             vars,
@@ -474,9 +425,9 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         let one = builder.one_extension();
         let c = self.constants();
         let is_final_col = c.start_flags_col;
-        let is_sq_col = c.start_flags_col + 2;
-        let is_mul_col = c.start_flags_col + 4;
-        let start_limbs_col = c.start_flags_col + 6;
+        let is_sq_col = c.start_flags_col + 1;
+        let is_mul_col = c.start_flags_col + 3;
+        let exp_val_col = c.start_flags_col + 5;
 
         let lv = vars.local_values;
         let nv = vars.next_values;
@@ -502,7 +453,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         // public inputs
         cur_col = 0;
         for i in (0..2 * c.num_io).step_by(2) {
-            let fq12_exp_io = read_fq12_exp_io(vars.public_inputs, &mut cur_col);
+            let fq12_exp_io = read_fq12_exp_u64_io(vars.public_inputs, &mut cur_col);
             let is_ith_input = lv[get_pulse_col(c.start_io_pulses_col, i)];
             let is_ith_output = lv[get_pulse_col(c.start_io_pulses_col, i + 1)];
             (0..12).for_each(|i| {
@@ -529,16 +480,11 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
                 );
             });
             let bit = is_mul;
-            let mut limbs = lv[start_limbs_col..start_limbs_col + NUM_INPUT_LIMBS].to_vec();
             let two = builder.two_extension();
-            limbs[0] = builder.mul_add_extension(limbs[0], two, bit);
-            vec_equal_circuit(
-                builder,
-                yield_constr,
-                is_ith_input,
-                &fq12_exp_io.exp_val,
-                &limbs,
-            );
+            let recovered = builder.mul_add_extension(lv[exp_val_col], two, bit);
+            let diff = builder.sub_extension(fq12_exp_io.exp_val, recovered);
+            let t = builder.mul_extension(is_ith_input, diff);
+            yield_constr.constraint(builder, t);
         }
 
         // transition
@@ -590,27 +536,17 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
                 b,
             );
         }
-        eval_flags_circuit(builder, yield_constr, lv, nv, c.start_flags_col);
+        eval_flags_u64_circuit(builder, yield_constr, lv, nv, c.start_flags_col);
         eval_fq12_mul_circuit(builder, yield_constr, is_sq, a, a, &output);
         eval_fq12_mul_circuit(builder, yield_constr, is_mul, a, b, &output);
 
         // flags, pulses, and lookup
-        eval_flags_circuit(
+        eval_flags_u64_circuit(
             builder,
             yield_constr,
             vars.local_values,
             vars.next_values,
             c.start_flags_col,
-        );
-        eval_periodic_pulse_circuit(
-            builder,
-            yield_constr,
-            vars.local_values,
-            vars.next_values,
-            c.start_flags_col + 1,
-            c.start_periodic_pulse_col,
-            2 * INPUT_LIMB_BITS,
-            2 * INPUT_LIMB_BITS - 2,
         );
         eval_pulse_circuit(
             builder,
@@ -618,7 +554,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
             vars.local_values,
             vars.next_values,
             c.start_io_pulses_col,
-            get_pulse_positions(c.num_io),
+            get_pulse_u64_positions(c.num_io),
         );
         eval_split_u16_range_check_circuit(
             builder,
@@ -642,7 +578,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
     }
 }
 
-pub(crate) fn fq12_exp_circuit_with_proof_target<
+pub(crate) fn fq12_exp_u64_circuit_with_proof_target<
     F: RichField + Extendable<D>,
     C: GenericConfig<D, F = F>,
     const D: usize,
@@ -650,7 +586,7 @@ pub(crate) fn fq12_exp_circuit_with_proof_target<
     builder: &mut CircuitBuilder<F, D>,
     log_num_io: usize,
 ) -> (
-    Vec<Fq12ExpInputTarget<F, D>>,
+    Vec<Fq12ExpU64InputTarget<F, D>>,
     Vec<Fq12Target<F, D>>,
     StarkProofWithPublicInputsTarget<D>,
 )
@@ -658,19 +594,19 @@ where
     <C as GenericConfig<D>>::Hasher: AlgebraicHasher<F>,
 {
     let num_io = 1 << log_num_io;
-    let stark = Fq12ExpStark::<F, D>::new(num_io);
+    let stark = Fq12ExpU64Stark::<F, D>::new(num_io);
     let inner_config = stark.config();
-    let degree_bits = 9 + log_num_io;
+    let degree_bits = 7 + log_num_io;
     let starky_proof_t =
         add_virtual_stark_proof_with_pis(builder, stark, &inner_config, degree_bits);
     verify_stark_proof_circuit::<F, C, _, D>(builder, stark, &starky_proof_t, &inner_config);
-    assert!(starky_proof_t.public_inputs.len() == FQ12_EXP_IO_LEN * num_io);
+    assert!(starky_proof_t.public_inputs.len() == FQ12_EXP_U64_IO_LEN * num_io);
     let mut cur_col = 0;
     let mut inputs = vec![];
     let mut outputs = vec![];
     let pi = starky_proof_t.public_inputs.clone();
     for _ in 0..num_io {
-        let io = read_fq12_exp_io(&pi, &mut cur_col);
+        let io = read_fq12_exp_u64_io(&pi, &mut cur_col);
         let x_coeffs =
             io.x.iter()
                 .map(|limb| {
@@ -703,8 +639,8 @@ where
         let x = Fq12Target::new(x_coeffs);
         let offset = Fq12Target::new(offset_coeffs);
         let output = Fq12Target::new(output_coeffs);
-        let exp_val = U256Target::<F, D>::from_vec(&io.exp_val);
-        let input = Fq12ExpInputTarget { x, offset, exp_val };
+        let exp_val = io.exp_val;
+        let input = Fq12ExpU64InputTarget { x, offset, exp_val };
         inputs.push(input);
         outputs.push(output);
     }
@@ -715,20 +651,17 @@ where
 mod tests {
     use std::time::Instant;
 
-    use crate::{
-        flags::NUM_INPUT_LIMBS,
-        fq12_exp::{fq12_exp_circuit_with_proof_target, Fq12ExpIONative, Fq12ExpStark},
-        input_target::Fq12ExpInput,
-        utils::u32_digits_to_biguint,
-    };
-    use ark_bn254::{Fq12, Fr};
+    use crate::fq12_exp_u64::fq12_exp_u64::fq12_exp_u64_circuit_with_proof_target;
+    use crate::fq12_exp_u64::fq12_exp_u64::Fq12ExpU64IONative;
+    use crate::fq12_exp_u64::fq12_exp_u64::Fq12ExpU64Stark;
+    use crate::input_target::Fq12ExpU64Input;
+    use ark_bn254::Fq12;
     use ark_ff::Field;
     use ark_std::UniformRand;
     use itertools::Itertools;
-    use num_bigint::BigUint;
+    use plonky2::field::types::{PrimeField64, Sample};
     use plonky2::{
-        field::goldilocks_field::GoldilocksField,
-        iop::witness::{PartialWitness, WitnessWrite},
+        iop::witness::PartialWitness,
         plonk::{
             circuit_builder::CircuitBuilder,
             circuit_data::CircuitConfig,
@@ -736,7 +669,6 @@ mod tests {
         },
         util::timing::TimingTree,
     };
-    use rand::Rng;
     use starky::{
         prover::prove,
         recursive_verifier::{
@@ -747,7 +679,7 @@ mod tests {
     };
 
     #[test]
-    fn test_fq12_exp_raw() {
+    fn test_fq12_exp_u64_raw() {
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
@@ -757,21 +689,21 @@ mod tests {
         let num_io = 1 << 4;
         let inputs = (0..num_io)
             .map(|_| {
-                let exp_val_fr: Fr = Fr::rand(&mut rng);
+                let exp_val_f = F::sample(&mut rng);
                 let x = Fq12::rand(&mut rng);
                 let offset = Fq12::rand(&mut rng);
-                let exp_val_biguint: BigUint = exp_val_fr.into();
-                let output: Fq12 = offset * x.pow(&exp_val_biguint.to_u64_digits());
-                Fq12ExpIONative {
+                let exp_val = exp_val_f.to_canonical_u64();
+                let output: Fq12 = offset * x.pow(&[exp_val]);
+                Fq12ExpU64IONative {
                     x,
                     offset,
-                    exp_val: exp_val_biguint.to_u32_digits().try_into().unwrap(),
+                    exp_val,
                     output,
                 }
             })
             .collect_vec();
 
-        type S = Fq12ExpStark<F, D>;
+        type S = Fq12ExpU64Stark<F, D>;
         let stark = S::new(num_io);
         let inner_config = stark.config();
 
@@ -807,8 +739,8 @@ mod tests {
     }
 
     #[test]
-    fn test_fq12_exp_circuit() {
-        let log_num_io = 4;
+    fn test_fq12_exp_u64_circuit() {
+        let log_num_io = 1;
         let num_io = 1 << log_num_io;
         let mut rng = rand::thread_rng();
         const D: usize = 2;
@@ -818,26 +750,23 @@ mod tests {
         let circuit_config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
         let (inputs_t, outputs_t, starky_proof_t) =
-            fq12_exp_circuit_with_proof_target::<F, C, D>(&mut builder, log_num_io);
+            fq12_exp_u64_circuit_with_proof_target::<F, C, D>(&mut builder, log_num_io);
+        dbg!(starky_proof_t.public_inputs.len());
 
-        let stark = Fq12ExpStark::<F, D>::new(num_io);
+        let stark = Fq12ExpU64Stark::<F, D>::new(num_io);
         let inner_config = stark.config();
 
         let mut ios = vec![];
         let mut inputs = vec![];
         let mut outputs = vec![];
         for _ in 0..num_io {
-            let exp_val: [u32; NUM_INPUT_LIMBS] = rand::random();
-            let exp_val_b = u32_digits_to_biguint(&exp_val);
+            let exp_val_f = F::sample(&mut rng);
+            let exp_val = exp_val_f.to_canonical_u64();
             let x = Fq12::rand(&mut rng);
             let offset = Fq12::rand(&mut rng);
-            let output: Fq12 = offset * x.pow(&exp_val_b.to_u64_digits());
-            let input = Fq12ExpInput {
-                x,
-                offset,
-                exp_val: u32_digits_to_biguint(&exp_val),
-            };
-            let io = Fq12ExpIONative {
+            let output: Fq12 = offset * x.pow(&[exp_val]);
+            let input = Fq12ExpU64Input { x, offset, exp_val };
+            let io = Fq12ExpU64IONative {
                 x,
                 offset,
                 exp_val,
@@ -850,22 +779,19 @@ mod tests {
 
         let trace = stark.generate_trace(&ios);
         let pi = stark.generate_public_inputs(&ios);
-        let inner_proof = prove::<F, C, _, D>(
-            stark,
-            &inner_config,
-            trace,
-            pi.try_into().unwrap(),
-            &mut TimingTree::default(),
-        )
-        .unwrap();
+        dbg!(pi.len());
+        let inner_proof =
+            prove::<F, C, _, D>(stark, &inner_config, trace, pi, &mut TimingTree::default())
+                .unwrap();
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
 
         dbg!(builder.num_gates());
         let data = builder.build::<C>();
-        dbg!(&data.common);
 
         let mut pw = PartialWitness::<F>::new();
+        println!("before set_stark_proof_with_pis_target");
         set_stark_proof_with_pis_target(&mut pw, &starky_proof_t, &inner_proof);
+        println!("after set_stark_proof_with_pis_target");
         inputs_t.iter().zip(inputs.iter()).for_each(|(t, w)| {
             t.set_witness(&mut pw, w);
         });
@@ -874,33 +800,6 @@ mod tests {
         });
         let now = Instant::now();
         let _proof = data.prove(pw).unwrap();
-        println!("end plonky2 proof generation: {:?}", now.elapsed());
-    }
-
-    #[test]
-    fn test_plonky2_range_check() {
-        const D: usize = 2;
-        type C = PoseidonGoldilocksConfig;
-        type F = GoldilocksField;
-        let mut rng = rand::thread_rng();
-        const N: usize = 9216;
-        let vec = [(); N].map(|_| rng.gen::<u16>());
-
-        let circuit_config = CircuitConfig::standard_recursion_config();
-        let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
-        let targets = builder.add_virtual_target_arr::<N>();
-        targets.iter().for_each(|x| builder.range_check(*x, 16));
-
-        dbg!(builder.num_gates());
-        let data = builder.build::<C>();
-
-        let now = Instant::now();
-        let mut pw = PartialWitness::<F>::new();
-        use plonky2::field::types::Field;
-        targets.iter().zip(vec.iter()).for_each(|(t, w)| {
-            pw.set_target(*t, F::from_canonical_u64(*w as u64));
-        });
-        let _proof = data.prove(pw);
         println!("end plonky2 proof generation: {:?}", now.elapsed());
     }
 }
