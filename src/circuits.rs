@@ -694,7 +694,6 @@ where
 {
     let n = inputs.len();
     let next_power_of_two = n.next_power_of_two();
-    assert!(next_power_of_two >= 128);
     let mut inputs = inputs.to_vec();
     inputs.resize(next_power_of_two, inputs.last().unwrap().clone());
     let log_num_io = next_power_of_two.trailing_zeros() as usize;
