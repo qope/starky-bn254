@@ -35,7 +35,8 @@ fn constants(num_io: usize) -> ExpU64StarkConstants {
 
 use std::marker::PhantomData;
 
-use ark_bn254::{Fq2, Fr, G2Affine};
+use ark_bn254::{Fq2, G2Affine};
+use ark_ec::AffineRepr;
 use itertools::Itertools;
 use plonky2::{
     field::{
@@ -304,8 +305,8 @@ impl<F: RichField + Extendable<D>, const D: usize> G2ExpStark<F, D> {
             G2Affine::new(b_x_fq2, b_y_fq2)
         };
         // assertion
-        let exp_val_fr: Fr = u32_digits_to_biguint(&exp_val).into();
-        let expected: G2Affine = (x * exp_val_fr + offset).into();
+        let exp_val = u32_digits_to_biguint(&exp_val);
+        let expected: G2Affine = (x.mul_bigint(&exp_val.to_u64_digits()) + offset).into();
         assert!(output == expected);
 
         rows

@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, str::FromStr};
 
 use crate::{
     fq12_exp::{fq12_exp_circuit_with_proof_target, Fq12ExpIONative, Fq12ExpStark},
@@ -12,6 +12,7 @@ use crate::{
     utils::u32_digits_to_biguint,
 };
 use ark_bn254::{Fq, Fq12, Fq2, Fr, G1Affine, G2Affine};
+use ark_ec::AffineRepr;
 use ark_ff::Field;
 use itertools::Itertools;
 use num_bigint::BigUint;
@@ -31,7 +32,7 @@ use plonky2::{
 };
 use plonky2_bn254::{
     curves::{g1curve_target::G1Target, g2curve_target::G2Target},
-    fields::fq12_target::Fq12Target,
+    fields::{fq12_target::Fq12Target, u256_target::U256Target},
 };
 use starky::{
     proof::StarkProofWithPublicInputsTarget, prover::prove,
@@ -186,7 +187,7 @@ where
         let x_y_c1 = get_biguint(pw, &self.input.x.y.coeffs[1].to_vec());
         let x_x = Fq2::new(x_x_c0.into(), x_x_c1.into());
         let x_y = Fq2::new(x_y_c0.into(), x_y_c1.into());
-        let x = G2Affine::new(x_x, x_y);
+        let x = G2Affine::new_unchecked(x_x, x_y);
 
         let offset_x_c0 = get_biguint(pw, &self.input.offset.x.coeffs[0].to_vec());
         let offset_x_c1 = get_biguint(pw, &self.input.offset.x.coeffs[1].to_vec());
@@ -197,8 +198,7 @@ where
         let offset = G2Affine::new(offset_x, offset_y);
 
         let exp_val = get_biguint(pw, &self.input.exp_val.to_vec());
-        let exp_val: Fr = exp_val.into();
-        let output: G2Affine = (x * exp_val + offset).into();
+        let output: G2Affine = (x.mul_bigint(&exp_val.to_u64_digits()) + offset).into();
         self.output.set_witness(out_buffer, &output);
     }
 
@@ -250,7 +250,7 @@ where
                 let x_y_c1 = get_biguint(pw, &input.x.y.coeffs[1].to_vec());
                 let x_x = Fq2::new(x_x_c0.into(), x_x_c1.into());
                 let x_y = Fq2::new(x_y_c0.into(), x_y_c1.into());
-                let x = G2Affine::new(x_x, x_y);
+                let x = G2Affine::new_unchecked(x_x, x_y);
 
                 let offset_x_c0 = get_biguint(pw, &input.offset.x.coeffs[0].to_vec());
                 let offset_x_c1 = get_biguint(pw, &input.offset.x.coeffs[1].to_vec());
@@ -262,8 +262,7 @@ where
                 let exp_val = get_biguint(pw, &input.exp_val.to_vec());
                 let mut exp_val_u32 = exp_val.to_u32_digits();
                 exp_val_u32.extend(vec![0; 8 - exp_val_u32.len()]);
-                let exp_val: Fr = exp_val.into();
-                let output: G2Affine = (x * exp_val + offset).into();
+                let output: G2Affine = (x.mul_bigint(&exp_val.to_u64_digits()) + offset).into();
                 G2ExpIONative {
                     x,
                     offset,
@@ -572,9 +571,12 @@ pub fn g1_exp_circuit<
 where
     C::Hasher: AlgebraicHasher<F>,
 {
-    assert!(inputs.len().is_power_of_two());
-    assert!(inputs.len() >= 128);
-    let log_num_io = inputs.len().trailing_zeros() as usize;
+    let n = inputs.len();
+    let next_power_of_two = n.next_power_of_two();
+    assert!(next_power_of_two >= 128);
+    let mut inputs = inputs.to_vec();
+    inputs.resize(next_power_of_two, inputs.last().unwrap().clone());
+    let log_num_io = next_power_of_two.trailing_zeros() as usize;
 
     let (inputs_constr, outputs, starky_proof) =
         g1_exp_circuit_with_proof_target::<F, C, D>(builder, log_num_io);
@@ -598,7 +600,8 @@ where
         _config: PhantomData,
     };
     builder.add_simple_generator(proof_generator);
-    outputs
+
+    outputs[..n].to_vec()
 }
 
 pub fn g2_exp_circuit<
@@ -612,9 +615,12 @@ pub fn g2_exp_circuit<
 where
     C::Hasher: AlgebraicHasher<F>,
 {
-    assert!(inputs.len().is_power_of_two());
-    assert!(inputs.len() >= 128);
-    let log_num_io = inputs.len().trailing_zeros() as usize;
+    let n = inputs.len();
+    let next_power_of_two = n.next_power_of_two();
+    assert!(next_power_of_two >= 128);
+    let mut inputs = inputs.to_vec();
+    inputs.resize(next_power_of_two, inputs.last().unwrap().clone());
+    let log_num_io = next_power_of_two.trailing_zeros() as usize;
 
     let (inputs_constr, outputs, starky_proof) =
         g2_exp_circuit_with_proof_target::<F, C, D>(builder, log_num_io);
@@ -638,6 +644,40 @@ where
         _config: PhantomData,
     };
     builder.add_simple_generator(proof_generator);
+    outputs[..n].to_vec()
+}
+
+pub fn g2_mul_by_cofactor_circuit<
+    F: RichField + Extendable<D>,
+    C: GenericConfig<D, F = F> + 'static,
+    const D: usize,
+>(
+    builder: &mut CircuitBuilder<F, D>,
+    inputs: &[G2Target<F, D>],
+) -> Vec<G2Target<F, D>>
+where
+    <C as GenericConfig<D>>::Hasher: AlgebraicHasher<F>,
+{
+    let exp_val_b = BigUint::from_str(
+        "21888242871839275222246405745257275088844257914179612981679871602714643921549",
+    )
+    .unwrap();
+    let exp_val = U256Target::constant(builder, &exp_val_b);
+    let g2_gen = G2Target::constant(builder, G2Affine::generator());
+    let neg_g2_gen = G2Target::constant(builder, -G2Affine::generator());
+    let exp_inputs = inputs
+        .iter()
+        .map(|x| G2ExpInputTarget {
+            x: x.clone(),
+            offset: g2_gen.clone(),
+            exp_val: exp_val.clone(),
+        })
+        .collect::<Vec<_>>();
+    let exp_outputs = g2_exp_circuit::<F, C, D>(builder, &exp_inputs);
+    let outputs = exp_outputs
+        .into_iter()
+        .map(|x| x.add(builder, &neg_g2_gen))
+        .collect::<Vec<_>>();
     outputs
 }
 
@@ -652,8 +692,12 @@ pub fn fq12_exp_circuit<
 where
     C::Hasher: AlgebraicHasher<F>,
 {
-    assert!(inputs.len().is_power_of_two());
-    let log_num_io = inputs.len().trailing_zeros() as usize;
+    let n = inputs.len();
+    let next_power_of_two = n.next_power_of_two();
+    assert!(next_power_of_two >= 128);
+    let mut inputs = inputs.to_vec();
+    inputs.resize(next_power_of_two, inputs.last().unwrap().clone());
+    let log_num_io = next_power_of_two.trailing_zeros() as usize;
 
     let (inputs_constr, outputs, starky_proof) =
         fq12_exp_circuit_with_proof_target::<F, C, D>(builder, log_num_io);
@@ -677,7 +721,7 @@ where
         _config: PhantomData,
     };
     builder.add_simple_generator(proof_generator);
-    outputs
+    outputs[..n].to_vec()
 }
 
 pub fn fq12_exp_u64_circuit<
@@ -691,8 +735,12 @@ pub fn fq12_exp_u64_circuit<
 where
     C::Hasher: AlgebraicHasher<F>,
 {
-    assert!(inputs.len().is_power_of_two());
-    let log_num_io = inputs.len().trailing_zeros() as usize;
+    let n = inputs.len();
+    let next_power_of_two = n.next_power_of_two();
+    assert!(next_power_of_two >= 128);
+    let mut inputs = inputs.to_vec();
+    inputs.resize(next_power_of_two, inputs.last().unwrap().clone());
+    let log_num_io = next_power_of_two.trailing_zeros() as usize;
 
     let (inputs_constr, outputs, starky_proof) =
         fq12_exp_u64_circuit_with_proof_target::<F, C, D>(builder, log_num_io);
@@ -716,14 +764,14 @@ where
         _config: PhantomData,
     };
     builder.add_simple_generator(proof_generator);
-    outputs
+    outputs[..n].to_vec()
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
 
-    use ark_bn254::{Fq12, Fr, G1Affine, G2Affine};
+    use ark_bn254::{Fq12, Fq2, Fr, G1Affine, G2Affine};
     use ark_ec::AffineRepr;
     use ark_ff::Field;
     use ark_std::UniformRand;
@@ -742,12 +790,18 @@ mod tests {
         },
     };
     use plonky2_bn254::{
-        curves::{g1curve_target::G1Target, g2curve_target::G2Target},
+        curves::{
+            g1curve_target::G1Target, g2curve_target::G2Target,
+            map_to_g2::map_to_g2_without_cofactor_mul,
+        },
         fields::{fq12_target::Fq12Target, u256_target::U256Target},
     };
 
     use crate::{
-        circuits::{fq12_exp_circuit, fq12_exp_u64_circuit, g1_exp_circuit, g2_exp_circuit},
+        circuits::{
+            fq12_exp_circuit, fq12_exp_u64_circuit, g1_exp_circuit, g2_exp_circuit,
+            g2_mul_by_cofactor_circuit,
+        },
         flags::NUM_INPUT_LIMBS,
         input_target::{
             Fq12ExpInputTarget, Fq12ExpU64InputTarget, G1ExpInput, G1ExpInputTarget,
@@ -762,8 +816,7 @@ mod tests {
         type F = GoldilocksField;
         type C = PoseidonGoldilocksConfig;
         const D: usize = 2;
-        let log_num_io = 7;
-        let num_io = 1 << log_num_io;
+        let num_io = 127;
 
         let config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(config);
@@ -915,6 +968,36 @@ mod tests {
         let _proof = data.prove(pw).unwrap();
     }
 
+    #[test]
+    fn test_g2_mul_by_cofactor() {
+        let mut rng = rand::thread_rng();
+        type F = GoldilocksField;
+        type C = PoseidonGoldilocksConfig;
+        const D: usize = 2;
+        let num_io = 65;
+
+        let config = CircuitConfig::standard_ecc_config();
+        let mut builder = CircuitBuilder::<F, D>::new(config);
+        let inputs_t = (0..num_io)
+            .map(|_| G2Target::empty(&mut builder))
+            .collect_vec();
+        let outputs_t = g2_mul_by_cofactor_circuit::<F, C, D>(&mut builder, &inputs_t);
+
+        let mut pw = PartialWitness::<F>::new();
+        let inputs = (0..num_io)
+            .map(|_| {
+                let u = Fq2::rand(&mut rng);
+                map_to_g2_without_cofactor_mul(u)
+            })
+            .collect_vec();
+        let outputs = inputs.iter().map(|x| x.mul_by_cofactor()).collect_vec();
+        for i in 0..num_io {
+            inputs_t[i].set_witness(&mut pw, &inputs[i]);
+            outputs_t[i].set_witness(&mut pw, &outputs[i]);
+        }
+        let data = builder.build::<C>();
+        let _proof = data.prove(pw).unwrap();
+    }
     #[test]
     fn test_fq12_msm() {
         let mut rng = rand::thread_rng();
