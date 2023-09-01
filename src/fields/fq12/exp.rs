@@ -70,8 +70,8 @@ use starky::{
 
 use crate::{
     constants::{ExpU64StarkConstants, N_LIMBS},
+    fields::native::MyFq12,
     input_target::Fq12ExpInputTarget,
-    native::MyFq12,
     utils::{
         equals::{
             fq12_equal_transition, fq12_equal_transition_circuit, vec_equal, vec_equal_circuit,

@@ -14,7 +14,7 @@ use plonky2::util::transpose;
 
 use super::flags::NUM_INPUT_LIMBS;
 use crate::constants::{LIMB_BITS, N_LIMBS};
-use crate::native::MyFq12;
+use crate::fields::native::MyFq12;
 
 pub fn is_power_of_two(num: usize) -> bool {
     num != 0 && num & (num - 1) == 0

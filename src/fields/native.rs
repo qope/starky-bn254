@@ -10,7 +10,6 @@ pub struct MyFq12 {
     pub coeffs: [Fq; 12],
 }
 
-// impl from trait
 impl From<Fq12> for MyFq12 {
     fn from(fq12: Fq12) -> Self {
         let c0: Fq6 = fq12.c0;

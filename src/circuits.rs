@@ -7,8 +7,8 @@ use crate::{
     fields::fq12_u64::exp_u64::{
         fq12_exp_u64_circuit_with_proof_target, Fq12ExpU64IONative, Fq12ExpU64Stark,
     },
+    fields::native::MyFq12,
     input_target::{Fq12ExpInputTarget, Fq12ExpU64InputTarget, G1ExpInputTarget, G2ExpInputTarget},
-    native::MyFq12,
     utils::utils::u32_digits_to_biguint,
 };
 use ark_bn254::{Fq, Fq12, Fq2, Fr, G1Affine, G2Affine};
