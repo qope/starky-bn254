@@ -7,8 +7,8 @@ use plonky2::{
     plonk::circuit_builder::CircuitBuilder,
 };
 
+use super::lookup::{eval_lookups, eval_lookups_circuit, permuted_cols};
 use crate::constants::LIMB_BITS;
-use crate::lookup::{eval_lookups, eval_lookups_circuit, permuted_cols};
 
 use starky::{
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},

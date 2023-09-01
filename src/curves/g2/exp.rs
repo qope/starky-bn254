@@ -68,29 +68,29 @@ use starky::{
 
 use crate::{
     constants::{ExpU64StarkConstants, N_LIMBS},
-    flags::{
-        eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
-        INPUT_LIMB_BITS, NUM_FLAGS_COLS, NUM_INPUT_LIMBS,
-    },
-    fq2::{read_fq2, write_fq2},
-    g1_exp::get_pulse_positions,
-    g2::{
+    curves::g1::exp::get_pulse_positions,
+    curves::g2::muladd::{
         eval_g2_add, eval_g2_add_circuit, eval_g2_double, eval_g2_double_circuit, generate_g2_add,
         generate_g2_double, read_g2_output, write_g2_output, G2Output,
     },
+    fields::fq2::{read_fq2, write_fq2},
     input_target::G2ExpInputTarget,
-    instruction::{
+    utils::equals::{
         fq2_equal_transition, fq2_equal_transition_circuit, vec_equal, vec_equal_circuit,
     },
-    pulse::{
+    utils::flags::{
+        eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
+        INPUT_LIMB_BITS, NUM_FLAGS_COLS, NUM_INPUT_LIMBS,
+    },
+    utils::pulse::{
         eval_periodic_pulse, eval_periodic_pulse_circuit, eval_pulse, eval_pulse_circuit,
         generate_periodic_pulse_witness, generate_pulse, get_pulse_col,
     },
-    range_check::{
+    utils::range_check::{
         eval_u16_range_check, eval_u16_range_check_circuit, generate_u16_range_check,
         u16_range_check_pairs,
     },
-    utils::{
+    utils::utils::{
         columns_to_fq2, fq2_to_columns, fq_to_u32_columns, i64_to_column_positive, read_u32_fq,
         u16_columns_to_u32_columns, u16_columns_to_u32_columns_circuit, u32_digits_to_biguint,
     },
@@ -880,11 +880,8 @@ where
 mod tests {
     use std::time::Instant;
 
-    use crate::{
-        flags::NUM_INPUT_LIMBS,
-        g2_exp::{G2ExpIONative, G2ExpStark},
-        utils::u32_digits_to_biguint,
-    };
+    use super::*;
+    use crate::utils::{flags::NUM_INPUT_LIMBS, utils::u32_digits_to_biguint};
     use ark_bn254::{Fr, G2Affine};
     use ark_std::UniformRand;
     use itertools::Itertools;

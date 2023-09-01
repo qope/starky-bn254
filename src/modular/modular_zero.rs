@@ -13,17 +13,15 @@ use plonky2::{
 
 use crate::{
     constants::{LIMB_BITS, N_LIMBS},
-    modular::AUX_COEFF_ABS_MAX,
-    utils::{
-        bigint_to_columns, columns_to_bigint, pol_mul_wide2, pol_remove_root_2exp, pol_sub_assign,
+    modular::modular::AUX_COEFF_ABS_MAX,
+    modular::pol_utils::{
+        pol_add_assign, pol_add_assign_ext_circuit, pol_adjoin_root, pol_adjoin_root_ext_circuit,
+        pol_mul_wide2, pol_mul_wide2_ext_circuit, pol_remove_root_2exp, pol_sub_assign,
+        pol_sub_assign_ext_circuit,
     },
+    utils::utils::{bigint_to_columns, columns_to_bigint},
 };
 use starky::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
-
-use super::utils::{
-    pol_add_assign, pol_add_assign_ext_circuit, pol_adjoin_root, pol_adjoin_root_ext_circuit,
-    pol_mul_wide2_ext_circuit, pol_sub_assign_ext_circuit,
-};
 
 #[derive(Default, Clone, Copy, Debug)]
 pub struct ModulusAuxZero<F> {

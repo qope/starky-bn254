@@ -1,15 +1,15 @@
 use std::{marker::PhantomData, str::FromStr};
 
 use crate::{
-    fq12_exp::{fq12_exp_circuit_with_proof_target, Fq12ExpIONative, Fq12ExpStark},
-    fq12_exp_u64::fq12_exp_u64::{
+    curves::g1::exp::{g1_exp_circuit_with_proof_target, G1ExpIONative, G1ExpStark},
+    curves::g2::exp::{g2_exp_circuit_with_proof_target, G2ExpIONative, G2ExpStark},
+    fields::fq12::exp::{fq12_exp_circuit_with_proof_target, Fq12ExpIONative, Fq12ExpStark},
+    fields::fq12_u64::exp_u64::{
         fq12_exp_u64_circuit_with_proof_target, Fq12ExpU64IONative, Fq12ExpU64Stark,
     },
-    g1_exp::{g1_exp_circuit_with_proof_target, G1ExpIONative, G1ExpStark},
-    g2_exp::{g2_exp_circuit_with_proof_target, G2ExpIONative, G2ExpStark},
     input_target::{Fq12ExpInputTarget, Fq12ExpU64InputTarget, G1ExpInputTarget, G2ExpInputTarget},
     native::MyFq12,
-    utils::u32_digits_to_biguint,
+    utils::utils::u32_digits_to_biguint,
 };
 use ark_bn254::{Fq, Fq12, Fq2, Fr, G1Affine, G2Affine};
 use ark_ec::AffineRepr;
@@ -800,12 +800,11 @@ mod tests {
             fq12_exp_circuit, fq12_exp_u64_circuit, g1_exp_circuit, g2_exp_circuit,
             g2_mul_by_cofactor_circuit,
         },
-        flags::NUM_INPUT_LIMBS,
         input_target::{
             Fq12ExpInputTarget, Fq12ExpU64InputTarget, G1ExpInput, G1ExpInputTarget,
             G2ExpInputTarget,
         },
-        utils::u32_digits_to_biguint,
+        utils::{flags::NUM_INPUT_LIMBS, utils::u32_digits_to_biguint},
     };
 
     #[test]

@@ -17,12 +17,14 @@ use plonky2::{
 };
 
 use crate::constants::N_LIMBS;
-use crate::modular::write_modulus_aux;
-use crate::modular_zero::{generate_modular_zero, write_modulus_aux_zero};
-use crate::range_check::{eval_split_u16_range_check, eval_split_u16_range_check_circuit};
-use crate::utils::{
-    columns_to_fq, fq_to_columns, i64_to_column_positive, pol_add, pol_mul_wide, pol_sub,
-    pol_sub_normal, positive_column_to_i64,
+use crate::modular::modular::write_modulus_aux;
+use crate::modular::modular_zero::{
+    eval_modular_zero, eval_modular_zero_circuit, generate_modular_zero, read_modulus_aux_zero,
+    write_modulus_aux_zero, ModulusAuxZero,
+};
+use crate::utils::range_check::{eval_split_u16_range_check, eval_split_u16_range_check_circuit};
+use crate::utils::utils::{
+    columns_to_fq, fq_to_columns, i64_to_column_positive, positive_column_to_i64,
 };
 use starky::{
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
@@ -31,20 +33,18 @@ use starky::{
     vars::{StarkEvaluationTargets, StarkEvaluationVars},
 };
 
-use crate::modular::{
+use crate::modular::modular::{
     bn254_base_modulus_bigint, bn254_base_modulus_packfield, eval_modular_op,
     eval_modular_op_circuit, generate_modular_op, read_modulus_aux, read_u256, write_u256,
     ModulusAux,
 };
+use crate::modular::pol_utils::{
+    pol_add, pol_add_ext_circuit, pol_mul_scalar, pol_mul_scalar_ext_circuit, pol_mul_wide,
+    pol_mul_wide_ext_circuit, pol_sub, pol_sub_ext_circuit, pol_sub_normal,
+    pol_sub_normal_ext_circuit,
+};
 
-use super::modular_zero::{
-    eval_modular_zero, eval_modular_zero_circuit, read_modulus_aux_zero, ModulusAuxZero,
-};
-use super::range_check::{generate_split_u16_range_check, split_u16_range_check_pairs};
-use super::utils::{
-    pol_add_ext_circuit, pol_mul_scalar, pol_mul_scalar_ext_circuit, pol_mul_wide_ext_circuit,
-    pol_sub_ext_circuit, pol_sub_normal_ext_circuit,
-};
+use crate::utils::range_check::{generate_split_u16_range_check, split_u16_range_check_pairs};
 
 pub struct G1Output<F> {
     pub lambda: [F; N_LIMBS],
@@ -647,7 +647,7 @@ mod tests {
         verifier::verify_stark_proof,
     };
 
-    use crate::g1::G1Stark;
+    use super::*;
 
     use super::{MAIN_COLS, NUM_RANGE_CHECKS};
     const COLUMNS: usize = MAIN_COLS + 1 + 6 * NUM_RANGE_CHECKS;

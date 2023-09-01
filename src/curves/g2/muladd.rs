@@ -10,21 +10,22 @@ use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 
 use crate::constants::N_LIMBS;
-use crate::fq2::{read_fq2, write_fq2};
-use crate::modular::{read_modulus_aux, ModulusAux};
-use crate::modular_zero::{read_modulus_aux_zero, write_modulus_aux_zero, ModulusAuxZero};
+use crate::modular::modular::{
+    bn254_base_modulus_bigint, bn254_base_modulus_packfield, eval_modular_op,
+    eval_modular_op_circuit, generate_modular_op, read_modulus_aux, write_modulus_aux, ModulusAux,
+};
+use crate::modular::modular_zero::{read_modulus_aux_zero, write_modulus_aux_zero, ModulusAuxZero};
 use starky::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
 
-use super::fq2::{
+use crate::fields::fq2::{
     pol_add_fq2, pol_add_fq2_circuit, pol_mul_fq2, pol_mul_fq2_circuit, pol_mul_scalar_fq2,
-    pol_mul_scalar_fq2_circuit, pol_sub_fq2, pol_sub_fq2_circuit, to_wide_fq2, to_wide_fq2_circuit,
+    pol_mul_scalar_fq2_circuit, pol_sub_fq2, pol_sub_fq2_circuit, read_fq2, to_wide_fq2,
+    to_wide_fq2_circuit, write_fq2,
 };
-use super::modular::{
-    bn254_base_modulus_bigint, bn254_base_modulus_packfield, eval_modular_op,
-    eval_modular_op_circuit, generate_modular_op, write_modulus_aux,
+use crate::modular::modular_zero::{
+    eval_modular_zero, eval_modular_zero_circuit, generate_modular_zero,
 };
-use super::modular_zero::{eval_modular_zero, eval_modular_zero_circuit, generate_modular_zero};
-use super::utils::{
+use crate::utils::utils::{
     columns_to_fq2, fq2_to_columns, i64_to_column_positive, positive_column_to_i64,
 };
 

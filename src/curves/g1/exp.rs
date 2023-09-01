@@ -67,28 +67,30 @@ use starky::{
 
 use crate::{
     constants::{ExpU64StarkConstants, N_LIMBS},
-    flags::{
-        eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
-        INPUT_LIMB_BITS, NUM_FLAGS_COLS, NUM_INPUT_LIMBS,
-    },
-    g1::{
+    curves::g1::muladd::{
         eval_g1_add, eval_g1_add_circuit, eval_g1_double, eval_g1_double_circuit, generate_g1_add,
         generate_g1_double, read_g1_output, write_g1_output, G1Output,
     },
     input_target::G1ExpInputTarget,
-    instruction::{fq_equal_transition, fq_equal_transition_circuit, vec_equal, vec_equal_circuit},
-    modular::{read_u256, write_u256},
-    pulse::{
-        eval_periodic_pulse, eval_periodic_pulse_circuit, eval_pulse, eval_pulse_circuit,
-        generate_periodic_pulse_witness, generate_pulse, get_pulse_col,
-    },
-    range_check::{
-        eval_u16_range_check, eval_u16_range_check_circuit, generate_u16_range_check,
-        u16_range_check_pairs,
+    modular::modular::{read_u256, write_u256},
+    utils::flags::{
+        eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
+        INPUT_LIMB_BITS, NUM_FLAGS_COLS, NUM_INPUT_LIMBS,
     },
     utils::{
-        columns_to_fq, fq_to_columns, fq_to_u32_columns, read_u32_fq, u16_columns_to_u32_columns,
-        u16_columns_to_u32_columns_circuit, u32_digits_to_biguint,
+        equals::{fq_equal_transition, fq_equal_transition_circuit, vec_equal, vec_equal_circuit},
+        pulse::{
+            eval_periodic_pulse, eval_periodic_pulse_circuit, eval_pulse, eval_pulse_circuit,
+            generate_periodic_pulse_witness, generate_pulse, get_pulse_col,
+        },
+        range_check::{
+            eval_u16_range_check, eval_u16_range_check_circuit, generate_u16_range_check,
+            u16_range_check_pairs,
+        },
+        utils::{
+            columns_to_fq, fq_to_columns, fq_to_u32_columns, read_u32_fq,
+            u16_columns_to_u32_columns, u16_columns_to_u32_columns_circuit, u32_digits_to_biguint,
+        },
     },
 };
 
@@ -799,11 +801,11 @@ where
 mod tests {
     use std::time::Instant;
 
+    use super::*;
     use crate::{
-        flags::NUM_INPUT_LIMBS,
-        g1_exp::{g1_exp_circuit_with_proof_target, G1ExpIONative, G1ExpStark},
         input_target::G1ExpInput,
-        utils::{biguint_to_bits, bits_to_biguint, u32_digits_to_biguint},
+        utils::flags::NUM_INPUT_LIMBS,
+        utils::utils::{biguint_to_bits, bits_to_biguint, u32_digits_to_biguint},
     };
     use ark_bn254::{Fr, G1Affine};
     use ark_std::UniformRand;
