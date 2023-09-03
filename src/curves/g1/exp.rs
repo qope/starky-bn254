@@ -3,7 +3,7 @@
 //<------------------------------------------------>main_cols: 24*N_LIMBS + 14
 //<----------------------------------->range_check(start: 0, end: 24*N_LIMBS-3))
 
-fn constants(num_io: usize) -> ExpU64StarkConstants {
+fn constants(num_io: usize) -> ExpStarkConstants {
     let start_flags_col = 24 * N_LIMBS;
     let num_main_cols = start_flags_col + NUM_FLAGS_COLS;
 
@@ -18,7 +18,7 @@ fn constants(num_io: usize) -> ExpU64StarkConstants {
     let num_columns = start_lookups_col + 1 + 2 * num_range_check_cols;
     let num_public_inputs = 7 * NUM_INPUT_LIMBS * num_io;
 
-    ExpU64StarkConstants {
+    ExpStarkConstants {
         num_columns,
         num_public_inputs,
         num_main_cols,
@@ -66,7 +66,7 @@ use starky::{
 };
 
 use crate::{
-    constants::{ExpU64StarkConstants, N_LIMBS},
+    constants::{ExpStarkConstants, N_LIMBS},
     curves::g1::muladd::{
         eval_g1_add, eval_g1_add_circuit, eval_g1_double, eval_g1_double_circuit, generate_g1_add,
         generate_g1_double, read_g1_output, write_g1_output, G1Output,
@@ -252,7 +252,7 @@ impl<F: RichField + Extendable<D>, const D: usize> G1ExpStark<F, D> {
         }
     }
 
-    pub fn constants(&self) -> ExpU64StarkConstants {
+    pub fn constants(&self) -> ExpStarkConstants {
         constants(self.num_io)
     }
 
