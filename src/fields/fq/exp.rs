@@ -73,8 +73,8 @@ use crate::{
             u16_range_check_pairs,
         },
         utils::{
-            columns_to_fq, fq_to_columns, fq_to_u16_columns, i64_to_column_positive, read_u16_fq,
-            read_u32_fq, u32_digits_to_biguint,
+            columns_to_fq, fq_to_columns, fq_to_u32_columns, i64_to_column_positive, read_u32_fq,
+            u16_columns_to_u32_columns, u16_columns_to_u32_columns_circuit, u32_digits_to_biguint,
         },
     },
 };
@@ -90,30 +90,33 @@ pub struct FqExpIONative {
     pub output: Fq,
 }
 
-const FQ_EXP_IO_LEN: usize = 3 * N_LIMBS + NUM_INPUT_LIMBS;
+pub(crate) const FQ_EXP_IO_LEN: usize = 4 * NUM_INPUT_LIMBS;
 
-pub struct FqExpIO<F> {
-    pub x: [F; N_LIMBS],
-    pub offset: [F; N_LIMBS],
+pub(crate) struct FqExpIO<F> {
+    pub x: [F; NUM_INPUT_LIMBS],
+    pub offset: [F; NUM_INPUT_LIMBS],
     pub exp_val: [F; NUM_INPUT_LIMBS],
-    pub output: [F; N_LIMBS],
+    pub output: [F; NUM_INPUT_LIMBS],
 }
 
-pub fn fq_exp_io_to_columns<F: RichField>(input: &FqExpIONative) -> [F; FQ_EXP_IO_LEN] {
+fn fq_exp_io_to_columns<F: RichField>(input: &FqExpIONative) -> [F; FQ_EXP_IO_LEN] {
     let exp_val = input.exp_val.map(F::from_canonical_u32);
     let mut columns = vec![];
-    columns.extend(fq_to_u16_columns::<F>(input.x));
-    columns.extend(fq_to_u16_columns::<F>(input.offset));
+    columns.extend(fq_to_u32_columns::<F>(input.x));
+    columns.extend(fq_to_u32_columns::<F>(input.offset));
     columns.extend(exp_val);
-    columns.extend(fq_to_u16_columns::<F>(input.output));
+    columns.extend(fq_to_u32_columns::<F>(input.output));
     columns.try_into().unwrap()
 }
 
-pub fn read_fq_exp_io<F: Clone + core::fmt::Debug>(lv: &[F], cur_col: &mut usize) -> FqExpIO<F> {
-    let x = read_u16_fq(lv, cur_col);
-    let offset = read_u16_fq(lv, cur_col);
+pub(crate) fn read_fq_exp_io<F: Clone + core::fmt::Debug>(
+    lv: &[F],
+    cur_col: &mut usize,
+) -> FqExpIO<F> {
+    let x = read_u32_fq(lv, cur_col);
+    let offset = read_u32_fq(lv, cur_col);
     let exp_val = read_u32_fq(lv, cur_col);
-    let output = read_u16_fq(lv, cur_col);
+    let output = read_u32_fq(lv, cur_col);
     FqExpIO {
         x,
         offset,
@@ -122,12 +125,7 @@ pub fn read_fq_exp_io<F: Clone + core::fmt::Debug>(lv: &[F], cur_col: &mut usize
     }
 }
 
-pub fn generate_fq_exp_first_row<F: RichField>(
-    lv: &mut [F],
-    start_flag_col: usize,
-    x: Fq,
-    offset: Fq,
-) {
+fn generate_fq_exp_first_row<F: RichField>(lv: &mut [F], start_flag_col: usize, x: Fq, offset: Fq) {
     let is_mul_col = start_flag_col + 4;
     let a = i64_to_column_positive(fq_to_columns(x));
     let b = i64_to_column_positive(fq_to_columns(offset));
@@ -143,7 +141,7 @@ pub fn generate_fq_exp_first_row<F: RichField>(
     write_fq_output(lv, &output, &mut cur_col);
 }
 
-pub fn generate_fq_exp_next_row<F: RichField>(lv: &[F], nv: &mut [F], start_flag_col: usize) {
+fn generate_fq_exp_next_row<F: RichField>(lv: &[F], nv: &mut [F], start_flag_col: usize) {
     let is_sq_col = start_flag_col + 2;
     let is_mul_col = start_flag_col + 4;
 
@@ -179,7 +177,7 @@ pub fn generate_fq_exp_next_row<F: RichField>(lv: &[F], nv: &mut [F], start_flag
     write_fq_output(nv, &next_output, &mut cur_col);
 }
 
-pub fn get_pulse_positions(num_io: usize) -> Vec<usize> {
+fn get_pulse_positions(num_io: usize) -> Vec<usize> {
     let num_rows_per_block = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
     let mut pulse_positions = vec![];
     for i in 0..num_io {
@@ -328,7 +326,8 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for FqExpStark<F,
             let fq_exp_io = read_fq_exp_io(pi, &mut cur_col);
             let is_ith_input = lv[get_pulse_col(c.start_io_pulses_col, i)];
             let is_ith_output = lv[get_pulse_col(c.start_io_pulses_col, i + 1)];
-
+            let a = u16_columns_to_u32_columns(a);
+            let b = u16_columns_to_u32_columns(b);
             vec_equal(yield_constr, is_ith_input, &fq_exp_io.x, &a);
             vec_equal(yield_constr, is_ith_input, &fq_exp_io.offset, &b);
             vec_equal(yield_constr, is_ith_output, &fq_exp_io.output, &b);
@@ -434,7 +433,8 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for FqExpStark<F,
             let fq_exp_io = read_fq_exp_io(vars.public_inputs, &mut cur_col);
             let is_ith_input = lv[get_pulse_col(c.start_io_pulses_col, i)];
             let is_ith_output = lv[get_pulse_col(c.start_io_pulses_col, i + 1)];
-
+            let a = u16_columns_to_u32_columns_circuit(builder, a);
+            let b = u16_columns_to_u32_columns_circuit(builder, b);
             vec_equal_circuit(builder, yield_constr, is_ith_input, &fq_exp_io.x, &a);
             vec_equal_circuit(builder, yield_constr, is_ith_input, &fq_exp_io.offset, &b);
             vec_equal_circuit(builder, yield_constr, is_ith_output, &fq_exp_io.output, &b);
@@ -590,7 +590,7 @@ mod tests {
 
         let mut rng = rand::thread_rng();
 
-        let num_io = 1 << 8;
+        let num_io = 1 << 7;
         let inputs = (0..num_io)
             .map(|_| {
                 let exp_val_fr: Fr = Fr::rand(&mut rng);

@@ -9,12 +9,13 @@ use plonky2::field::types::{Field, PrimeField64};
 use plonky2::hash::hash_types::RichField;
 use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::iop::target::Target;
+use plonky2::iop::witness::Witness;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::util::transpose;
+use plonky2_bn254::fields::native::MyFq12;
 
 use super::flags::NUM_INPUT_LIMBS;
 use crate::constants::{LIMB_BITS, N_LIMBS};
-use crate::fields::native::MyFq12;
 
 pub fn is_power_of_two(num: usize) -> bool {
     num != 0 && num & (num - 1) == 0
@@ -231,4 +232,13 @@ pub fn trace_rows_to_poly_values<F: Field, const COLUMNS: usize>(
         .into_iter()
         .map(|column| PolynomialValues::new(column))
         .collect()
+}
+
+pub fn get_u256_biguint<F: RichField, W: Witness<F>>(pw: &W, x: &[Target]) -> BigUint {
+    assert!(x.len() == 8);
+    let x_value = x
+        .iter()
+        .map(|x| pw.get_target(*x).to_canonical_u64() as u32)
+        .collect_vec();
+    u32_digits_to_biguint(&x_value)
 }
