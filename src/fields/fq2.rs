@@ -5,20 +5,16 @@ use plonky2::{
 };
 
 use crate::{
-    modular::write_u256,
-    utils::{pol_add_wide, pol_mul_wide, pol_sub_wide},
+    modular::modular::{read_u256, write_u256},
+    modular::pol_utils::{
+        pol_add_normal, pol_add_normal_ext_circuit, pol_add_wide, pol_add_wide_ext_circuit,
+        pol_mul_scalar, pol_mul_scalar_ext_circuit, pol_mul_wide, pol_mul_wide_ext_circuit,
+        pol_sub_normal, pol_sub_normal_ext_circuit, pol_sub_wide, pol_sub_wide_ext_circuit,
+    },
 };
 use core::fmt::Debug;
 
-use super::{
-    constants::N_LIMBS,
-    modular::read_u256,
-    utils::{
-        pol_add_normal, pol_add_normal_ext_circuit, pol_add_wide_ext_circuit, pol_mul_scalar,
-        pol_mul_scalar_ext_circuit, pol_mul_wide_ext_circuit, pol_sub_normal,
-        pol_sub_normal_ext_circuit, pol_sub_wide_ext_circuit,
-    },
-};
+use crate::constants::N_LIMBS;
 use std::ops::*;
 
 pub fn to_wide_fq2<T>(x: [[T; N_LIMBS]; 2]) -> [[T; 2 * N_LIMBS - 1]; 2]

@@ -1,3 +1,15 @@
+use crate::constants::N_LIMBS;
+use crate::modular::modular::{
+    bn254_base_modulus_bigint, bn254_base_modulus_packfield, eval_modular_op,
+    eval_modular_op_circuit, generate_modular_op, read_modulus_aux, read_u256, write_modulus_aux,
+    write_u256, ModulusAux,
+};
+use crate::modular::pol_utils::{
+    pol_add_assign, pol_add_assign_ext_circuit, pol_add_wide, pol_add_wide_ext_circuit,
+    pol_mul_scalar, pol_mul_scalar_ext_circuit, pol_mul_wide, pol_mul_wide_ext_circuit,
+    pol_sub_assign, pol_sub_assign_ext_circuit, pol_sub_wide, pol_sub_wide_ext_circuit,
+};
+use crate::utils::utils::positive_column_to_i64;
 use core::fmt::Debug;
 use core::ops::*;
 use itertools::Itertools;
@@ -8,22 +20,6 @@ use plonky2::{
     plonk::circuit_builder::CircuitBuilder,
 };
 use starky::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
-
-use crate::{
-    constants::N_LIMBS,
-    modular::{
-        bn254_base_modulus_bigint, bn254_base_modulus_packfield, eval_modular_op,
-        eval_modular_op_circuit, read_modulus_aux, write_modulus_aux, write_u256,
-    },
-    utils::{
-        pol_add_assign, pol_add_assign_ext_circuit, pol_add_wide, pol_add_wide_ext_circuit,
-        pol_mul_scalar, pol_mul_scalar_ext_circuit, pol_mul_wide, pol_mul_wide_ext_circuit,
-        pol_sub_assign, pol_sub_assign_ext_circuit, pol_sub_wide, pol_sub_wide_ext_circuit,
-        positive_column_to_i64,
-    },
-};
-
-use super::modular::{generate_modular_op, read_u256, ModulusAux};
 
 pub fn pol_mul_fq12<T>(
     a_coeffs: Vec<[T; N_LIMBS]>,
@@ -341,17 +337,17 @@ mod tests {
         verifier::verify_stark_proof,
     };
 
+    use crate::fields::fq12::mul::{
+        eval_fq12_mul, eval_fq12_mul_circuit, generate_fq12_mul, read_fq12_output, write_fq12,
+        write_fq12_output,
+    };
     use crate::{
         constants::N_LIMBS,
-        fq12::{
-            eval_fq12_mul, eval_fq12_mul_circuit, generate_fq12_mul, read_fq12_output, write_fq12,
-            write_fq12_output,
-        },
-        range_check::{
+        utils::range_check::{
             eval_split_u16_range_check, eval_split_u16_range_check_circuit,
             generate_split_u16_range_check, split_u16_range_check_pairs,
         },
-        utils::{columns_to_fq12, fq12_to_columns, i64_to_column_positive},
+        utils::utils::{columns_to_fq12, fq12_to_columns, i64_to_column_positive},
     };
 
     use super::read_fq12;

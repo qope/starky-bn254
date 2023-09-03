@@ -35,7 +35,8 @@ fn constants(num_io: usize) -> ExpStarkConstants {
 
 use std::marker::PhantomData;
 
-use ark_bn254::{Fq2, Fr, G2Affine};
+use ark_bn254::{Fq2, G2Affine};
+use ark_ec::AffineRepr;
 use itertools::Itertools;
 use plonky2::{
     field::{
@@ -45,46 +46,42 @@ use plonky2::{
     },
     hash::hash_types::RichField,
     iop::{target::Target, witness::WitnessWrite},
-    plonk::{
-        circuit_builder::CircuitBuilder,
-        config::{AlgebraicHasher, GenericConfig},
-    },
+    plonk::circuit_builder::CircuitBuilder,
     util::transpose,
 };
+
 use starky::{
     config::StarkConfig,
     constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer},
     permutation::PermutationPair,
-    proof::StarkProofWithPublicInputsTarget,
-    recursive_verifier::{add_virtual_stark_proof_with_pis, verify_stark_proof_circuit},
     stark::Stark,
     vars::{StarkEvaluationTargets, StarkEvaluationVars},
 };
 
 use crate::{
     constants::{ExpStarkConstants, N_LIMBS},
-    flags::{
-        eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
-        INPUT_LIMB_BITS, NUM_FLAGS_COLS, NUM_INPUT_LIMBS,
-    },
-    fq2::{read_fq2, write_fq2},
-    g1_exp::get_pulse_positions,
-    g2::{
+    curves::g1::exp::get_pulse_positions,
+    curves::g2::muladd::{
         eval_g2_add, eval_g2_add_circuit, eval_g2_double, eval_g2_double_circuit, generate_g2_add,
         generate_g2_double, read_g2_output, write_g2_output, G2Output,
     },
-    instruction::{
+    fields::fq2::{read_fq2, write_fq2},
+    utils::equals::{
         fq2_equal_transition, fq2_equal_transition_circuit, vec_equal, vec_equal_circuit,
     },
-    pulse::{
+    utils::flags::{
+        eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
+        INPUT_LIMB_BITS, NUM_FLAGS_COLS, NUM_INPUT_LIMBS,
+    },
+    utils::pulse::{
         eval_periodic_pulse, eval_periodic_pulse_circuit, eval_pulse, eval_pulse_circuit,
         generate_periodic_pulse_witness, generate_pulse, get_pulse_col,
     },
-    range_check::{
+    utils::range_check::{
         eval_u16_range_check, eval_u16_range_check_circuit, generate_u16_range_check,
         u16_range_check_pairs,
     },
-    utils::{
+    utils::utils::{
         columns_to_fq2, fq2_to_columns, fq_to_u32_columns, i64_to_column_positive, read_u32_fq,
         u16_columns_to_u32_columns, u16_columns_to_u32_columns_circuit, u32_digits_to_biguint,
     },
@@ -123,19 +120,19 @@ impl G2ExpIO<Target> {
         let output_y_c0 = fq_to_u32_columns(value.output.y.c0);
         let output_y_c1 = fq_to_u32_columns(value.output.y.c1);
 
-        pw.set_target_arr(self.x[0], x_x_c0);
-        pw.set_target_arr(self.x[1], x_x_c1);
-        pw.set_target_arr(self.x[2], x_y_c0);
-        pw.set_target_arr(self.x[3], x_y_c1);
-        pw.set_target_arr(self.offset[0], offset_x_c0);
-        pw.set_target_arr(self.offset[1], offset_x_c1);
-        pw.set_target_arr(self.offset[2], offset_y_c0);
-        pw.set_target_arr(self.offset[3], offset_y_c1);
-        pw.set_target_arr(self.exp_val, exp_val);
-        pw.set_target_arr(self.output[0], output_x_c0);
-        pw.set_target_arr(self.output[1], output_x_c1);
-        pw.set_target_arr(self.output[2], output_y_c0);
-        pw.set_target_arr(self.output[3], output_y_c1);
+        pw.set_target_arr(&self.x[0], &x_x_c0);
+        pw.set_target_arr(&self.x[1], &x_x_c1);
+        pw.set_target_arr(&self.x[2], &x_y_c0);
+        pw.set_target_arr(&self.x[3], &x_y_c1);
+        pw.set_target_arr(&self.offset[0], &offset_x_c0);
+        pw.set_target_arr(&self.offset[1], &offset_x_c1);
+        pw.set_target_arr(&self.offset[2], &offset_y_c0);
+        pw.set_target_arr(&self.offset[3], &offset_y_c1);
+        pw.set_target_arr(&self.exp_val, &exp_val);
+        pw.set_target_arr(&self.output[0], &output_x_c0);
+        pw.set_target_arr(&self.output[1], &output_x_c1);
+        pw.set_target_arr(&self.output[2], &output_y_c0);
+        pw.set_target_arr(&self.output[3], &output_y_c1);
     }
 }
 
@@ -299,8 +296,8 @@ impl<F: RichField + Extendable<D>, const D: usize> G2ExpStark<F, D> {
             G2Affine::new(b_x_fq2, b_y_fq2)
         };
         // assertion
-        let exp_val_fr: Fr = u32_digits_to_biguint(&exp_val).into();
-        let expected: G2Affine = (x * exp_val_fr + offset).into();
+        let exp_val = u32_digits_to_biguint(&exp_val);
+        let expected: G2Affine = (x.mul_bigint(&exp_val.to_u64_digits()) + offset).into();
         assert!(output == expected);
 
         rows
@@ -809,45 +806,12 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G2ExpStark<F,
     }
 }
 
-pub(crate) fn g2_exp_circuit_with_proof_target<
-    F: RichField + Extendable<D>,
-    C: GenericConfig<D, F = F>,
-    const D: usize,
->(
-    builder: &mut CircuitBuilder<F, D>,
-    log_num_io: usize,
-) -> (Vec<G2ExpIO<Target>>, StarkProofWithPublicInputsTarget<D>)
-where
-    <C as GenericConfig<D>>::Hasher: AlgebraicHasher<F>,
-{
-    assert!(log_num_io >= 7);
-    let num_io = 1 << log_num_io;
-    let stark = G2ExpStark::<F, D>::new(num_io);
-    let inner_config = stark.config();
-    let degree_bits = 9 + log_num_io;
-    let starky_proof_t =
-        add_virtual_stark_proof_with_pis(builder, stark, &inner_config, degree_bits);
-    verify_stark_proof_circuit::<F, C, _, D>(builder, stark, &starky_proof_t, &inner_config);
-    assert!(starky_proof_t.public_inputs.len() == G2_EXP_IO_LEN * num_io);
-    let mut cur_col = 0;
-    let mut g1_exp_ios = vec![];
-    let pi = starky_proof_t.public_inputs.clone();
-    for _ in 0..num_io {
-        let g1_exp_io = read_g2_exp_io(&pi, &mut cur_col);
-        g1_exp_ios.push(g1_exp_io);
-    }
-    (g1_exp_ios, starky_proof_t)
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
 
-    use crate::{
-        flags::NUM_INPUT_LIMBS,
-        g2_exp::{G2ExpIONative, G2ExpStark},
-        utils::u32_digits_to_biguint,
-    };
+    use super::*;
+    use crate::utils::{flags::NUM_INPUT_LIMBS, utils::u32_digits_to_biguint};
     use ark_bn254::{Fr, G2Affine};
     use ark_std::UniformRand;
     use itertools::Itertools;

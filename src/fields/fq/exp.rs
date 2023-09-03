@@ -1,22 +1,22 @@
-//    a       |      b       |   output   |  flags   | rotate_witness |  io_pulses   |     lookups         |
-// 12*N_LIMBS |  12*N_LIMBS  | 84*N_LIMBS |   14     |       2        |  1+4*c.num_io  | 1+6*NUM_RANGE_CHECK |
-//<------------------------------------------------>main_cols: 108*N_LIMBS + 14
-//<----------------------------------->range_check(start: 0, end: 108*N_LIMBS-12))
+//    a    |    b    |    output   |  flags   | rotate_witness |  io_pulses     |     lookups         |
+// N_LIMBS | N_LIMBS |  7*N_LIMBS  |   14     |       2        |  1+4*c.num_io  | 1+2*NUM_RANGE_CHECK |
+//<------------------------------------------>main_cols: 9*N_LIMBS + 14
+//<------------------------------>range_check(start: 0, end: 9*N_LIMBS-1))
 
 fn constants(num_io: usize) -> ExpStarkConstants {
-    let start_flags_col = 108 * N_LIMBS;
+    let start_flags_col = 9 * N_LIMBS;
     let num_main_cols = start_flags_col + NUM_FLAGS_COLS;
 
     let start_periodic_pulse_col = num_main_cols;
     let start_io_pulses_col = start_periodic_pulse_col + 2;
     let start_lookups_col = start_io_pulses_col + 1 + 4 * num_io;
 
-    let start_range_check_col = 24 * N_LIMBS;
-    let num_range_check_cols = 84 * N_LIMBS - 12;
+    let start_range_check_col = 0;
+    let num_range_check_cols = 9 * N_LIMBS - 1;
     let end_range_check_col = start_range_check_col + num_range_check_cols;
 
-    let num_columns = start_lookups_col + 1 + 6 * num_range_check_cols;
-    let num_public_inputs = 37 * NUM_INPUT_LIMBS * num_io;
+    let num_columns = start_lookups_col + 1 + 2 * num_range_check_cols;
+    let num_public_inputs = FQ_EXP_IO_LEN * num_io;
 
     ExpStarkConstants {
         num_columns,
@@ -35,8 +35,7 @@ fn constants(num_io: usize) -> ExpStarkConstants {
 
 use std::marker::PhantomData;
 
-use ark_bn254::Fq12;
-use ark_ff::Field;
+use ark_bn254::Fq;
 use itertools::Itertools;
 use plonky2::{
     field::{
@@ -45,7 +44,6 @@ use plonky2::{
         polynomial::PolynomialValues,
     },
     hash::hash_types::RichField,
-    iop::ext_target::ExtensionTarget,
     plonk::circuit_builder::CircuitBuilder,
     util::transpose,
 };
@@ -59,106 +57,67 @@ use starky::{
 
 use crate::{
     constants::{ExpStarkConstants, N_LIMBS},
-    flags::{
-        eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
-        INPUT_LIMB_BITS, NUM_FLAGS_COLS, NUM_INPUT_LIMBS,
-    },
-    fq12::{
-        eval_fq12_mul, eval_fq12_mul_circuit, generate_fq12_mul, read_fq12, read_fq12_output,
-        write_fq12, write_fq12_output, Fq12Output,
-    },
-    instruction::{vec_equal, vec_equal_circuit},
-    native::MyFq12,
-    pulse::{
-        eval_periodic_pulse, eval_periodic_pulse_circuit, eval_pulse, eval_pulse_circuit,
-        generate_periodic_pulse_witness, generate_pulse, get_pulse_col,
-    },
-    range_check::{
-        eval_split_u16_range_check, eval_split_u16_range_check_circuit,
-        generate_split_u16_range_check, split_u16_range_check_pairs,
-    },
+    modular::modular::{read_u256, write_u256},
     utils::{
-        columns_to_fq12, fq_to_columns, fq_to_u32_columns, i64_to_column_positive, read_u32_fq,
-        u16_columns_to_u32_columns, u16_columns_to_u32_columns_circuit, u32_digits_to_biguint,
+        equals::{fq_equal_transition, fq_equal_transition_circuit, vec_equal, vec_equal_circuit},
+        flags::{
+            eval_flags, eval_flags_circuit, generate_flags_first_row, generate_flags_next_row,
+            INPUT_LIMB_BITS, NUM_FLAGS_COLS, NUM_INPUT_LIMBS,
+        },
+        pulse::{
+            eval_periodic_pulse, eval_periodic_pulse_circuit, eval_pulse, eval_pulse_circuit,
+            generate_periodic_pulse_witness, generate_pulse, get_pulse_col,
+        },
+        range_check::{
+            eval_u16_range_check, eval_u16_range_check_circuit, generate_u16_range_check,
+            u16_range_check_pairs,
+        },
+        utils::{
+            columns_to_fq, fq_to_columns, fq_to_u32_columns, i64_to_column_positive, read_u32_fq,
+            u16_columns_to_u32_columns, u16_columns_to_u32_columns_circuit, u32_digits_to_biguint,
+        },
     },
 };
 
-pub fn fq12_equal_transition<P: PackedField>(
-    yield_constr: &mut ConstraintConsumer<P>,
-    filter: P,
-    x: [[P; N_LIMBS]; 12],
-    y: [[P; N_LIMBS]; 12],
-) {
-    (0..12).for_each(|i| {
-        let x_i = x[i];
-        let y_i = y[i];
-        x_i.iter()
-            .zip(y_i.iter())
-            .for_each(|(&x, &y)| yield_constr.constraint_transition(filter * (x - y)));
-    });
-}
+use super::mul::{
+    eval_fq_mul, eval_fq_mul_circuit, generate_fq_mul, read_fq_output, write_fq_output, FqOutput,
+};
 
-pub fn fq12_equal_transition_circuit<F: RichField + Extendable<D>, const D: usize>(
-    builder: &mut CircuitBuilder<F, D>,
-    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
-    filter: ExtensionTarget<D>,
-    x: [[ExtensionTarget<D>; N_LIMBS]; 12],
-    y: [[ExtensionTarget<D>; N_LIMBS]; 12],
-) {
-    (0..12).for_each(|i| {
-        let x_i = x[i];
-        let y_i = y[i];
-        x_i.iter().zip(y_i.iter()).for_each(|(&x, &y)| {
-            let diff = builder.sub_extension(x, y);
-            let t = builder.mul_extension(filter, diff);
-            yield_constr.constraint_transition(builder, t);
-        });
-    });
-}
-
-pub struct Fq12ExpIONative {
-    pub x: Fq12,
-    pub offset: Fq12,
+pub struct FqExpIONative {
+    pub x: Fq,
+    pub offset: Fq,
     pub exp_val: [u32; NUM_INPUT_LIMBS],
-    pub output: Fq12,
+    pub output: Fq,
 }
 
-// 37*NUM_INPUT_LIMBS
-pub struct Fq12ExpIO<F> {
-    pub x: [[F; NUM_INPUT_LIMBS]; 12],
-    pub offset: [[F; NUM_INPUT_LIMBS]; 12],
+pub(crate) const FQ_EXP_IO_LEN: usize = 4 * NUM_INPUT_LIMBS;
+
+pub(crate) struct FqExpIO<F> {
+    pub x: [F; NUM_INPUT_LIMBS],
+    pub offset: [F; NUM_INPUT_LIMBS],
     pub exp_val: [F; NUM_INPUT_LIMBS],
-    pub output: [[F; NUM_INPUT_LIMBS]; 12],
+    pub output: [F; NUM_INPUT_LIMBS],
 }
 
-pub fn fq12_exp_io_to_columns<F: RichField>(input: &Fq12ExpIONative) -> [F; 37 * NUM_INPUT_LIMBS] {
+fn fq_exp_io_to_columns<F: RichField>(input: &FqExpIONative) -> [F; FQ_EXP_IO_LEN] {
     let exp_val = input.exp_val.map(F::from_canonical_u32);
     let mut columns = vec![];
-    let my_x: MyFq12 = input.x.into();
-    let my_offset: MyFq12 = input.offset.into();
-    let my_output: MyFq12 = input.output.into();
-    my_x.coeffs.iter().for_each(|c| {
-        columns.extend(fq_to_u32_columns::<F>(*c));
-    });
-    my_offset.coeffs.iter().for_each(|c| {
-        columns.extend(fq_to_u32_columns::<F>(*c));
-    });
+    columns.extend(fq_to_u32_columns::<F>(input.x));
+    columns.extend(fq_to_u32_columns::<F>(input.offset));
     columns.extend(exp_val);
-    my_output.coeffs.iter().for_each(|c| {
-        columns.extend(fq_to_u32_columns::<F>(*c));
-    });
+    columns.extend(fq_to_u32_columns::<F>(input.output));
     columns.try_into().unwrap()
 }
 
-pub fn read_fq12_exp_io<F: Clone + core::fmt::Debug>(
+pub(crate) fn read_fq_exp_io<F: Clone + core::fmt::Debug>(
     lv: &[F],
     cur_col: &mut usize,
-) -> Fq12ExpIO<F> {
-    let x = [(); 12].map(|_| read_u32_fq(lv, cur_col));
-    let offset = [(); 12].map(|_| read_u32_fq(lv, cur_col));
+) -> FqExpIO<F> {
+    let x = read_u32_fq(lv, cur_col);
+    let offset = read_u32_fq(lv, cur_col);
     let exp_val = read_u32_fq(lv, cur_col);
-    let output = [(); 12].map(|_| read_u32_fq(lv, cur_col));
-    Fq12ExpIO {
+    let output = read_u32_fq(lv, cur_col);
+    FqExpIO {
         x,
         offset,
         exp_val,
@@ -166,52 +125,30 @@ pub fn read_fq12_exp_io<F: Clone + core::fmt::Debug>(
     }
 }
 
-pub fn generate_fq12_exp_first_row<F: RichField>(
-    lv: &mut [F],
-    start_flag_col: usize,
-    x: Fq12,
-    offset: Fq12,
-) {
+fn generate_fq_exp_first_row<F: RichField>(lv: &mut [F], start_flag_col: usize, x: Fq, offset: Fq) {
     let is_mul_col = start_flag_col + 4;
-    let a: MyFq12 = x.into();
-    let b: MyFq12 = offset.into();
-    let a = a
-        .coeffs
-        .iter()
-        .map(|c| fq_to_columns(*c))
-        .map(i64_to_column_positive)
-        .collect_vec()
-        .try_into()
-        .unwrap();
-    let b = b
-        .coeffs
-        .iter()
-        .map(|c| fq_to_columns(*c))
-        .map(i64_to_column_positive)
-        .collect_vec()
-        .try_into()
-        .unwrap();
-
+    let a = i64_to_column_positive(fq_to_columns(x));
+    let b = i64_to_column_positive(fq_to_columns(offset));
     let is_mul = lv[is_mul_col];
     let output = if is_mul == F::ONE {
-        generate_fq12_mul(a, b)
+        generate_fq_mul(a, b)
     } else {
-        Fq12Output::default()
+        FqOutput::default()
     };
     let mut cur_col = 0;
-    write_fq12(lv, a, &mut cur_col);
-    write_fq12(lv, b, &mut cur_col);
-    write_fq12_output(lv, &output, &mut cur_col);
+    write_u256(lv, &a, &mut cur_col);
+    write_u256(lv, &b, &mut cur_col);
+    write_fq_output(lv, &output, &mut cur_col);
 }
 
-pub fn generate_fq12_exp_next_row<F: RichField>(lv: &[F], nv: &mut [F], start_flag_col: usize) {
+fn generate_fq_exp_next_row<F: RichField>(lv: &[F], nv: &mut [F], start_flag_col: usize) {
     let is_sq_col = start_flag_col + 2;
     let is_mul_col = start_flag_col + 4;
 
     let mut cur_col = 0;
-    let a = read_fq12(lv, &mut cur_col);
-    let b = read_fq12(lv, &mut cur_col);
-    let output = read_fq12_output(lv, &mut cur_col);
+    let a = read_u256(lv, &mut cur_col);
+    let b = read_u256(lv, &mut cur_col);
+    let output = read_fq_output(lv, &mut cur_col);
     let is_sq = lv[is_sq_col];
     let is_mul = lv[is_mul_col];
     let next_is_sq = nv[is_sq_col];
@@ -228,19 +165,19 @@ pub fn generate_fq12_exp_next_row<F: RichField>(lv: &[F], nv: &mut [F], start_fl
 
     // calc next output
     let next_output = if next_is_sq == F::ONE {
-        generate_fq12_mul(next_a, next_a)
+        generate_fq_mul(next_a, next_a)
     } else if next_is_mul == F::ONE {
-        generate_fq12_mul(next_a, next_b)
+        generate_fq_mul(next_a, next_b)
     } else {
-        Fq12Output::default()
+        FqOutput::default()
     };
     cur_col = 0;
-    write_fq12(nv, next_a, &mut cur_col);
-    write_fq12(nv, next_b, &mut cur_col);
-    write_fq12_output(nv, &next_output, &mut cur_col);
+    write_u256(nv, &next_a, &mut cur_col);
+    write_u256(nv, &next_b, &mut cur_col);
+    write_fq_output(nv, &next_output, &mut cur_col);
 }
 
-pub fn get_pulse_positions(num_io: usize) -> Vec<usize> {
+fn get_pulse_positions(num_io: usize) -> Vec<usize> {
     let num_rows_per_block = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
     let mut pulse_positions = vec![];
     for i in 0..num_io {
@@ -253,12 +190,12 @@ pub fn get_pulse_positions(num_io: usize) -> Vec<usize> {
 }
 
 #[derive(Clone, Copy)]
-pub struct Fq12ExpStark<F: RichField + Extendable<D>, const D: usize> {
+pub struct FqExpStark<F: RichField + Extendable<D>, const D: usize> {
     pub num_io: usize,
     _phantom: PhantomData<F>,
 }
 
-impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
+impl<F: RichField + Extendable<D>, const D: usize> FqExpStark<F, D> {
     pub fn new(num_io: usize) -> Self {
         Self {
             num_io,
@@ -277,38 +214,39 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
 
     pub fn generate_trace_for_one_block(
         &self,
-        x: Fq12,
-        offset: Fq12,
+        x: Fq,
+        offset: Fq,
         exp_val: [u32; NUM_INPUT_LIMBS],
     ) -> Vec<Vec<F>> {
         let c = self.constants();
         let num_rows = 2 * INPUT_LIMB_BITS * NUM_INPUT_LIMBS;
         let mut lv = vec![F::ZERO; c.num_main_cols];
         generate_flags_first_row(&mut lv, c.start_flags_col, exp_val);
-        generate_fq12_exp_first_row(&mut lv, c.start_flags_col, x, offset);
+        generate_fq_exp_first_row(&mut lv, c.start_flags_col, x, offset);
         let mut rows = vec![lv.clone()];
         for i in 0..num_rows - 1 {
             let mut nv = vec![F::ZERO; lv.len()];
             generate_flags_next_row(&lv, &mut nv, i, c.start_flags_col);
-            generate_fq12_exp_next_row(&lv, &mut nv, c.start_flags_col);
+            generate_fq_exp_next_row(&lv, &mut nv, c.start_flags_col);
             rows.push(nv.clone());
             lv = nv;
         }
         let output = {
             let last_row = rows.last().unwrap();
-            let mut cur_col = 12 * N_LIMBS;
-            let b = read_fq12(last_row, &mut cur_col);
-            columns_to_fq12(b)
+            let mut cur_col = N_LIMBS;
+            let b = read_u256(last_row, &mut cur_col);
+            columns_to_fq(&b)
         };
         // assertion
         let exp_val_biguint = u32_digits_to_biguint(&exp_val);
-        let expected: Fq12 = offset * x.pow(&exp_val_biguint.to_u64_digits());
+        use ark_ff::Field;
+        let expected: Fq = offset * x.pow(&exp_val_biguint.to_u64_digits());
         assert!(output == expected);
 
         rows
     }
 
-    pub fn generate_trace(&self, inputs: &[Fq12ExpIONative]) -> Vec<PolynomialValues<F>> {
+    pub fn generate_trace(&self, inputs: &[FqExpIONative]) -> Vec<PolynomialValues<F>> {
         let c = self.constants();
         assert!(inputs.len() == c.num_io);
 
@@ -328,7 +266,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
         );
 
         generate_pulse(&mut trace_cols, get_pulse_positions(c.num_io));
-        generate_split_u16_range_check(
+        generate_u16_range_check(
             c.start_range_check_col..c.end_range_check_col,
             &mut trace_cols,
         );
@@ -339,15 +277,15 @@ impl<F: RichField + Extendable<D>, const D: usize> Fq12ExpStark<F, D> {
             .collect()
     }
 
-    pub fn generate_public_inputs(&self, inputs: &[Fq12ExpIONative]) -> Vec<F> {
+    pub fn generate_public_inputs(&self, inputs: &[FqExpIONative]) -> Vec<F> {
         inputs
             .iter()
-            .flat_map(|input| fq12_exp_io_to_columns::<F>(input))
+            .flat_map(|input| fq_exp_io_to_columns::<F>(input))
             .collect_vec()
     }
 }
 
-impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<F, D> {
+impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for FqExpStark<F, D> {
     fn eval_packed_generic<FE, P, const D2: usize>(
         &self,
         vars: StarkEvaluationVars<FE, P>,
@@ -366,9 +304,9 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         let nv = vars.next_values;
 
         let mut cur_col = 0;
-        let a = read_fq12(lv, &mut cur_col);
-        let b = read_fq12(lv, &mut cur_col);
-        let output = read_fq12_output(lv, &mut cur_col);
+        let a = read_u256(lv, &mut cur_col);
+        let b = read_u256(lv, &mut cur_col);
+        let output = read_fq_output(lv, &mut cur_col);
         let is_mul = lv[is_mul_col];
         let is_sq = lv[is_sq_col];
         let is_final = lv[is_final_col];
@@ -385,45 +323,44 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         let pi: &[P] = &vars.public_inputs.iter().map(|&x| x.into()).collect_vec();
         cur_col = 0;
         for i in (0..2 * c.num_io).step_by(2) {
-            let fq12_exp_io = read_fq12_exp_io(pi, &mut cur_col);
+            let fq_exp_io = read_fq_exp_io(pi, &mut cur_col);
             let is_ith_input = lv[get_pulse_col(c.start_io_pulses_col, i)];
             let is_ith_output = lv[get_pulse_col(c.start_io_pulses_col, i + 1)];
-            let x = a.map(u16_columns_to_u32_columns);
-            let b = b.map(u16_columns_to_u32_columns);
-            (0..12).for_each(|i| {
-                vec_equal(yield_constr, is_ith_input, &fq12_exp_io.x[i], &x[i]);
-                vec_equal(yield_constr, is_ith_input, &fq12_exp_io.offset[i], &b[i]);
-                vec_equal(yield_constr, is_ith_output, &fq12_exp_io.output[i], &b[i]);
-            });
+            let a = u16_columns_to_u32_columns(a);
+            let b = u16_columns_to_u32_columns(b);
+            vec_equal(yield_constr, is_ith_input, &fq_exp_io.x, &a);
+            vec_equal(yield_constr, is_ith_input, &fq_exp_io.offset, &b);
+            vec_equal(yield_constr, is_ith_output, &fq_exp_io.output, &b);
+
             let bit = is_mul;
             let mut limbs = lv[start_limbs_col..start_limbs_col + NUM_INPUT_LIMBS].to_vec();
             limbs[0] = limbs[0] * P::Scalar::TWO + bit;
-            vec_equal(yield_constr, is_ith_input, &fq12_exp_io.exp_val, &limbs);
+            vec_equal(yield_constr, is_ith_input, &fq_exp_io.exp_val, &limbs);
         }
 
         // transition
         cur_col = 0;
-        let next_a = read_fq12(nv, &mut cur_col);
-        let next_b = read_fq12(nv, &mut cur_col);
+        let next_a = read_u256(nv, &mut cur_col);
+        let next_b = read_u256(nv, &mut cur_col);
         // if is_double==F::ONE
         {
-            fq12_equal_transition(yield_constr, is_not_final * is_sq, next_a, output.output);
-            fq12_equal_transition(yield_constr, is_not_final * is_sq, next_b, b);
+            fq_equal_transition(yield_constr, is_not_final * is_sq, &next_a, &output.output);
+            fq_equal_transition(yield_constr, is_not_final * is_sq, &next_b, &b);
         }
         // if is_add==F::ONE
         {
-            fq12_equal_transition(yield_constr, is_not_final * is_mul, next_a, a);
-            fq12_equal_transition(yield_constr, is_not_final * is_mul, next_b, output.output);
+            fq_equal_transition(yield_constr, is_not_final * is_mul, &next_a, &a);
+            fq_equal_transition(yield_constr, is_not_final * is_mul, &next_b, &output.output);
         }
         // else
         {
             let is_sq_nor_mul = P::ONES - is_sq - is_mul;
-            fq12_equal_transition(yield_constr, is_not_final * is_sq_nor_mul, next_a, a);
-            fq12_equal_transition(yield_constr, is_not_final * is_sq_nor_mul, next_b, b);
+            fq_equal_transition(yield_constr, is_not_final * is_sq_nor_mul, &next_a, &a);
+            fq_equal_transition(yield_constr, is_not_final * is_sq_nor_mul, &next_b, &b);
         }
         eval_flags(yield_constr, lv, nv, c.start_flags_col);
-        eval_fq12_mul(yield_constr, is_sq, a, a, &output);
-        eval_fq12_mul(yield_constr, is_mul, a, b, &output);
+        eval_fq_mul(yield_constr, is_sq, a, a, &output);
+        eval_fq_mul(yield_constr, is_mul, a, b, &output);
 
         // flags, pulses, and lookup
         eval_flags(
@@ -448,7 +385,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
             c.start_io_pulses_col,
             get_pulse_positions(c.num_io),
         );
-        eval_split_u16_range_check(
+        eval_u16_range_check(
             vars,
             yield_constr,
             c.start_lookups_col,
@@ -473,9 +410,9 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         let nv = vars.next_values;
 
         let mut cur_col = 0;
-        let a = read_fq12(lv, &mut cur_col);
-        let b = read_fq12(lv, &mut cur_col);
-        let output = read_fq12_output(lv, &mut cur_col);
+        let a = read_u256(lv, &mut cur_col);
+        let b = read_u256(lv, &mut cur_col);
+        let output = read_fq_output(lv, &mut cur_col);
         let is_mul = lv[is_mul_col];
         let is_sq = lv[is_sq_col];
         let is_final = lv[is_final_col];
@@ -493,34 +430,15 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
         // public inputs
         cur_col = 0;
         for i in (0..2 * c.num_io).step_by(2) {
-            let fq12_exp_io = read_fq12_exp_io(vars.public_inputs, &mut cur_col);
+            let fq_exp_io = read_fq_exp_io(vars.public_inputs, &mut cur_col);
             let is_ith_input = lv[get_pulse_col(c.start_io_pulses_col, i)];
             let is_ith_output = lv[get_pulse_col(c.start_io_pulses_col, i + 1)];
-            let x = a.map(|x| u16_columns_to_u32_columns_circuit(builder, x));
-            let b = b.map(|x| u16_columns_to_u32_columns_circuit(builder, x));
-            (0..12).for_each(|i| {
-                vec_equal_circuit(
-                    builder,
-                    yield_constr,
-                    is_ith_input,
-                    &fq12_exp_io.x[i],
-                    &x[i],
-                );
-                vec_equal_circuit(
-                    builder,
-                    yield_constr,
-                    is_ith_input,
-                    &fq12_exp_io.offset[i],
-                    &b[i],
-                );
-                vec_equal_circuit(
-                    builder,
-                    yield_constr,
-                    is_ith_output,
-                    &fq12_exp_io.output[i],
-                    &b[i],
-                );
-            });
+            let a = u16_columns_to_u32_columns_circuit(builder, a);
+            let b = u16_columns_to_u32_columns_circuit(builder, b);
+            vec_equal_circuit(builder, yield_constr, is_ith_input, &fq_exp_io.x, &a);
+            vec_equal_circuit(builder, yield_constr, is_ith_input, &fq_exp_io.offset, &b);
+            vec_equal_circuit(builder, yield_constr, is_ith_output, &fq_exp_io.output, &b);
+
             let bit = is_mul;
             let mut limbs = lv[start_limbs_col..start_limbs_col + NUM_INPUT_LIMBS].to_vec();
             let two = builder.two_extension();
@@ -529,37 +447,37 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
                 builder,
                 yield_constr,
                 is_ith_input,
-                &fq12_exp_io.exp_val,
+                &fq_exp_io.exp_val,
                 &limbs,
             );
         }
 
         // transition
         cur_col = 0;
-        let next_a = read_fq12(nv, &mut cur_col);
-        let next_b = read_fq12(nv, &mut cur_col);
+        let next_a = read_u256(nv, &mut cur_col);
+        let next_b = read_u256(nv, &mut cur_col);
         // if is_sq==F::ONE
         {
             let is_not_final_and_sq = builder.mul_extension(is_not_final, is_sq);
-            fq12_equal_transition_circuit(
+            fq_equal_transition_circuit(
                 builder,
                 yield_constr,
                 is_not_final_and_sq,
-                next_a,
-                output.output,
+                &next_a,
+                &output.output,
             );
-            fq12_equal_transition_circuit(builder, yield_constr, is_not_final_and_sq, next_b, b);
+            fq_equal_transition_circuit(builder, yield_constr, is_not_final_and_sq, &next_b, &b);
         }
         // if is_mul==F::ONE
         {
             let is_not_final_and_mul = builder.mul_extension(is_not_final, is_mul);
-            fq12_equal_transition_circuit(builder, yield_constr, is_not_final_and_mul, next_a, a);
-            fq12_equal_transition_circuit(
+            fq_equal_transition_circuit(builder, yield_constr, is_not_final_and_mul, &next_a, &a);
+            fq_equal_transition_circuit(
                 builder,
                 yield_constr,
                 is_not_final_and_mul,
-                next_b,
-                output.output,
+                &next_b,
+                &output.output,
             );
         }
         // else
@@ -568,24 +486,24 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
             let is_not_sq_nor_mul = builder.sub_extension(one, is_sq_or_mul);
             let is_not_final_and_not_sq_nor_mu =
                 builder.mul_extension(is_not_final, is_not_sq_nor_mul);
-            fq12_equal_transition_circuit(
+            fq_equal_transition_circuit(
                 builder,
                 yield_constr,
                 is_not_final_and_not_sq_nor_mu,
-                next_a,
-                a,
+                &next_a,
+                &a,
             );
-            fq12_equal_transition_circuit(
+            fq_equal_transition_circuit(
                 builder,
                 yield_constr,
                 is_not_final_and_not_sq_nor_mu,
-                next_b,
-                b,
+                &next_b,
+                &b,
             );
         }
         eval_flags_circuit(builder, yield_constr, lv, nv, c.start_flags_col);
-        eval_fq12_mul_circuit(builder, yield_constr, is_sq, a, a, &output);
-        eval_fq12_mul_circuit(builder, yield_constr, is_mul, a, b, &output);
+        eval_fq_mul_circuit(builder, yield_constr, is_sq, a, a, &output);
+        eval_fq_mul_circuit(builder, yield_constr, is_mul, a, b, &output);
 
         // flags, pulses, and lookup
         eval_flags_circuit(
@@ -613,7 +531,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
             c.start_io_pulses_col,
             get_pulse_positions(c.num_io),
         );
-        eval_split_u16_range_check_circuit(
+        eval_u16_range_check_circuit(
             builder,
             vars,
             yield_constr,
@@ -628,7 +546,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
 
     fn permutation_pairs(&self) -> Vec<PermutationPair> {
         let c = self.constants();
-        split_u16_range_check_pairs(
+        u16_range_check_pairs(
             c.start_lookups_col,
             c.start_range_check_col..c.end_range_check_col,
         )
@@ -639,8 +557,9 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for Fq12ExpStark<
 mod tests {
     use std::time::Instant;
 
-    use crate::fq12_exp::{Fq12ExpIONative, Fq12ExpStark};
-    use ark_bn254::{Fq12, Fr};
+    use super::*;
+
+    use ark_bn254::Fr;
     use ark_ff::Field;
     use ark_std::UniformRand;
     use itertools::Itertools;
@@ -664,22 +583,22 @@ mod tests {
     };
 
     #[test]
-    fn test_fq12_exp() {
+    fn test_fq_exp_raw() {
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
 
         let mut rng = rand::thread_rng();
 
-        let num_io = 1 << 4;
+        let num_io = 1 << 7;
         let inputs = (0..num_io)
             .map(|_| {
                 let exp_val_fr: Fr = Fr::rand(&mut rng);
-                let x = Fq12::rand(&mut rng);
-                let offset = Fq12::rand(&mut rng);
+                let x = Fq::rand(&mut rng);
+                let offset = Fq::rand(&mut rng);
                 let exp_val_biguint: BigUint = exp_val_fr.into();
-                let output: Fq12 = offset * x.pow(&exp_val_biguint.to_u64_digits());
-                Fq12ExpIONative {
+                let output: Fq = offset * x.pow(&exp_val_biguint.to_u64_digits());
+                FqExpIONative {
                     x,
                     offset,
                     exp_val: exp_val_biguint.to_u32_digits().try_into().unwrap(),
@@ -688,7 +607,7 @@ mod tests {
             })
             .collect_vec();
 
-        type S = Fq12ExpStark<F, D>;
+        type S = FqExpStark<F, D>;
         let stark = S::new(num_io);
         let inner_config = stark.config();
 
@@ -707,7 +626,7 @@ mod tests {
         verify_stark_proof(stark, inner_proof.clone(), &inner_config).unwrap();
         println!("end stark proof generation: {:?}", now.elapsed());
 
-        let circuit_config = CircuitConfig::standard_ecc_config();
+        let circuit_config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
         let mut pw = PartialWitness::new();
         let degree_bits = inner_proof.proof.recover_degree_bits(&inner_config);

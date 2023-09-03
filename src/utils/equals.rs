@@ -7,7 +7,7 @@ use plonky2::{
 
 use starky::constraint_consumer::{ConstraintConsumer, RecursiveConstraintConsumer};
 
-use super::constants::N_LIMBS;
+use crate::constants::N_LIMBS;
 
 pub fn eval_bool<P: PackedField>(yield_constr: &mut ConstraintConsumer<P>, val: P) {
     yield_constr.constraint(val * val - val);
@@ -227,4 +227,37 @@ pub fn fq12_equal_last_circuit<F: RichField + Extendable<D>, const D: usize>(
     x.iter()
         .zip(y.iter())
         .for_each(|(&x_i, &y_i)| fq_equal_last_circuit(builder, yield_constr, x_i, y_i));
+}
+
+pub fn fq12_equal_transition<P: PackedField>(
+    yield_constr: &mut ConstraintConsumer<P>,
+    filter: P,
+    x: [[P; N_LIMBS]; 12],
+    y: [[P; N_LIMBS]; 12],
+) {
+    (0..12).for_each(|i| {
+        let x_i = x[i];
+        let y_i = y[i];
+        x_i.iter()
+            .zip(y_i.iter())
+            .for_each(|(&x, &y)| yield_constr.constraint_transition(filter * (x - y)));
+    });
+}
+
+pub fn fq12_equal_transition_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    yield_constr: &mut RecursiveConstraintConsumer<F, D>,
+    filter: ExtensionTarget<D>,
+    x: [[ExtensionTarget<D>; N_LIMBS]; 12],
+    y: [[ExtensionTarget<D>; N_LIMBS]; 12],
+) {
+    (0..12).for_each(|i| {
+        let x_i = x[i];
+        let y_i = y[i];
+        x_i.iter().zip(y_i.iter()).for_each(|(&x, &y)| {
+            let diff = builder.sub_extension(x, y);
+            let t = builder.mul_extension(filter, diff);
+            yield_constr.constraint_transition(builder, t);
+        });
+    });
 }

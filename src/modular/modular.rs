@@ -12,18 +12,16 @@ use plonky2::{
     hash::hash_types::RichField,
 };
 
-use crate::utils::{
-    bigint_to_columns, columns_to_bigint, pol_add_assign, pol_adjoin_root, pol_mul_wide2,
-    pol_remove_root_2exp, pol_sub_assign,
+use crate::modular::pol_utils::{
+    pol_add_assign, pol_add_assign_ext_circuit, pol_adjoin_root, pol_adjoin_root_ext_circuit,
+    pol_mul_wide2, pol_mul_wide2_ext_circuit, pol_remove_root_2exp, pol_sub_assign,
+    pol_sub_assign_ext_circuit,
 };
-use crate::utils::{
-    pol_add_assign_ext_circuit, pol_adjoin_root_ext_circuit, pol_mul_wide2_ext_circuit,
-};
+use crate::utils::utils::{bigint_to_columns, columns_to_bigint};
 use starky::constraint_consumer::ConstraintConsumer;
 use starky::constraint_consumer::RecursiveConstraintConsumer;
 
 use super::addcy::{eval_ext_circuit_addcy, eval_packed_generic_addcy};
-use super::utils::pol_sub_assign_ext_circuit;
 
 use crate::constants::{LIMB_BITS, N_LIMBS};
 
@@ -42,13 +40,11 @@ pub fn generate_modular_op<F: PrimeField64>(
     pol_input: [i64; 2 * N_LIMBS - 1],
 ) -> ([F; N_LIMBS], F, ModulusAux<F>) {
     let modulus_limbs = bigint_to_columns(modulus);
-
     let mut constr_poly = [0i64; 2 * N_LIMBS];
     constr_poly[..2 * N_LIMBS - 1].copy_from_slice(&pol_input);
     // two_exp_256 == 2^256
     let mut two_exp_256 = BigInt::zero();
     two_exp_256.set_bit(256, true);
-
     let input = columns_to_bigint(&constr_poly);
     let mut output = &input % modulus;
     if output.sign() == Sign::Minus {
@@ -314,6 +310,16 @@ pub fn bn254_base_modulus_packfield<P: PackedField>() -> [P; N_LIMBS] {
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        modular::pol_utils::{pol_mul_wide, pol_mul_wide_ext_circuit},
+        utils::range_check::{
+            eval_split_u16_range_check, eval_split_u16_range_check_circuit,
+            generate_split_u16_range_check, split_u16_range_check_pairs,
+        },
+        utils::utils::fq_to_columns,
+    };
+
+    use super::*;
     use core::marker::PhantomData;
 
     use ark_bn254::Fq;
@@ -334,19 +340,6 @@ mod tests {
             config::{GenericConfig, PoseidonGoldilocksConfig},
         },
         util::{timing::TimingTree, transpose},
-    };
-
-    use crate::{
-        constants::{LIMB_BITS, N_LIMBS},
-        modular::{bn254_base_modulus_bigint, bn254_base_modulus_packfield},
-        modular::{eval_modular_op, eval_modular_op_circuit},
-        modular::{write_modulus_aux, write_u256},
-        range_check::{
-            eval_split_u16_range_check, eval_split_u16_range_check_circuit,
-            generate_split_u16_range_check, split_u16_range_check_pairs,
-        },
-        utils::fq_to_columns,
-        utils::{columns_to_bigint, pol_mul_wide, pol_mul_wide_ext_circuit},
     };
 
     use starky::{

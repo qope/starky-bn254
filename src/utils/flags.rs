@@ -316,8 +316,8 @@ mod tests {
     };
 
     use crate::{
-        flags::{INPUT_LIMB_BITS, NUM_INPUT_LIMBS},
-        pulse::{
+        utils::flags::{INPUT_LIMB_BITS, NUM_INPUT_LIMBS},
+        utils::pulse::{
             eval_periodic_pulse, eval_periodic_pulse_circuit, eval_pulse, eval_pulse_circuit,
             generate_periodic_pulse_witness, generate_pulse, get_pulse_col,
         },
