@@ -122,6 +122,7 @@ mod tests {
     use plonky2::plonk::circuit_builder::CircuitBuilder;
     use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
     use plonky2::util::timing::TimingTree;
+    use starky::permutation::PermutationPair;
 
     use super::{eval_lookups, eval_lookups_circuit, permuted_cols};
     use starky::config::StarkConfig;
@@ -197,6 +198,13 @@ mod tests {
                 Self::COL_PERMUTED_INPUT,
                 Self::COL_PERMUTED_TABLE,
             );
+        }
+
+        fn permutation_pairs(&self) -> Vec<starky::permutation::PermutationPair> {
+            vec![
+                PermutationPair::singletons(0, 2),
+                PermutationPair::singletons(1, 3),
+            ]
         }
 
         fn constraint_degree(&self) -> usize {
