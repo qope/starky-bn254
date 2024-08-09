@@ -445,7 +445,7 @@ mod tests {
             FE: FieldExtension<D2, BaseField = F>,
             P: PackedField<Scalar = FE>,
         {
-            let lv = vars.local_values.clone();
+            let lv = vars.local_values;
 
             eval_split_u16_range_check(
                 vars,
@@ -487,7 +487,7 @@ mod tests {
             vars: StarkEvaluationTargets<D>,
             yield_constr: &mut RecursiveConstraintConsumer<F, D>,
         ) {
-            let lv = vars.local_values.clone();
+            let lv = vars.local_values;
 
             eval_split_u16_range_check_circuit(
                 builder,

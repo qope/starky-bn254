@@ -562,7 +562,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1Stark<F, D>
             START_RANGE_CHECK..END_RANGE_CHECK,
         );
 
-        let lv = vars.local_values.clone();
+        let lv = vars.local_values;
 
         let mut cur_col = 0;
         let a_x = read_u256(&lv, &mut cur_col);
@@ -595,7 +595,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Stark<F, D> for G1Stark<F, D>
             START_RANGE_CHECK..END_RANGE_CHECK,
         );
 
-        let lv = vars.local_values.clone();
+        let lv = vars.local_values;
 
         let mut cur_col = 0;
         let a_x = read_u256(&lv, &mut cur_col);

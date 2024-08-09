@@ -291,7 +291,7 @@ impl<F: RichField + Extendable<D>, const D: usize> G1ExpStark<F, D> {
         assert!(inputs.len() == self.constants().num_io);
 
         let mut rows = vec![];
-        for input in inputs.clone() {
+        for input in inputs {
             let row = self.generate_trace_for_one_block(input.x, input.offset, input.exp_val);
             rows.extend(row);
         }
